@@ -1,0 +1,16 @@
+from datetime import date as Date
+from app.core.database import supabase
+from app.core.accounts import get_account_id
+
+
+def insert_expense(amount: float, description: str, category: str | None = None, account_name: str | None = None, date: Date | None = None) -> bool | None:
+    row = {"amount": amount, "description": description, "category": category}
+    if date is not None:
+        row["date"] = date.isoformat()
+    if account_name is not None:
+        account_id = get_account_id(account_name)
+        if account_id is None:
+            return False
+        row["account_id"] = account_id
+    supabase.table("expenses").insert(row).execute()
+    return True if account_name is not None else None

@@ -1,0 +1,21 @@
+from datetime import date as Date
+from app.core.database import supabase
+from app.core.accounts import get_account_id
+from app.core.projects import get_project_id
+
+
+def insert_income(amount: float, description: str, category: str | None = None, account_name: str | None = None, date: Date | None = None, project_name: str | None = None) -> bool | None:
+    row = {"amount": amount, "description": description, "category": category}
+    if date is not None:
+        row["date"] = date.isoformat()
+    if project_name is not None:
+        project_id = get_project_id(project_name)
+        if project_id is not None:
+            row["project_id"] = project_id
+    if account_name is not None:
+        account_id = get_account_id(account_name)
+        if account_id is None:
+            return False
+        row["account_id"] = account_id
+    supabase.table("incomes").insert(row).execute()
+    return True if account_name is not None else None
