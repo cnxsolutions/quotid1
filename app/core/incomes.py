@@ -4,7 +4,7 @@ from app.core.accounts import get_account_id
 from app.core.projects import get_project_id
 
 
-def insert_income(amount: float, description: str, category: str | None = None, account_name: str | None = None, date: Date | None = None, project_name: str | None = None) -> bool | None:
+def insert_income(amount: float, description: str = "", category: str | None = None, account_name: str | None = None, date: Date | None = None, project_name: str | None = None) -> bool | None:
     row = {"amount": amount, "description": description, "category": category}
     if date is not None:
         row["date"] = date.isoformat()

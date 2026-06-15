@@ -28,6 +28,7 @@ BTN_NEW_ACCOUNT = "Nouveau compte"
 BTN_TODAY_DATE = "Aujourd'hui"
 BTN_YESTERDAY = "Hier"
 BTN_CUSTOM_DATE = "Saisir une date"
+BTN_ROUTINE = "📅 Routine"
 
 (
     WAITING_EXPENSE_AMOUNT,
@@ -63,7 +64,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [BTN_CHARGES, BTN_PROJECTS],
         [BTN_TASK, BTN_TODAY],
         [BTN_DONE, BTN_SUMMARY],
-        [BTN_ACCOUNTS],
+        [BTN_ACCOUNTS, BTN_ROUTINE],
     ],
     resize_keyboard=True,
 )
@@ -111,8 +112,8 @@ def _category_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
-def _format_confirmation(kind: str, amount: float, description: str, category: str | None, account_raw: str | None, d: Date | None) -> str:
-    parts = [f"{amount:.2f} €", description]
+def _format_confirmation(kind: str, amount: float, category: str | None, account_raw: str | None, d: Date | None) -> str:
+    parts = [f"{amount:.2f} €"]
     if category:
         parts.append(category)
     if account_raw and account_raw != BTN_SKIP:
@@ -123,7 +124,37 @@ def _format_confirmation(kind: str, amount: float, description: str, category: s
     return f"{label} enregistré{'e' if kind == 'expense' else ''} : " + " | ".join(parts)
 
 
+ROUTINE = [
+    ("04h15", "Réveil"),
+    ("04h30", "Fajr à la mosquée"),
+    ("05h00", "Coran / science"),
+    ("06h00", "🏢 Sopra (deep work)"),
+    ("08h00", "💼 Business"),
+    ("10h00", "🏢 Sopra"),
+    ("12h00", "🏋️ Basic Fit + repas"),
+    ("13h30", "Coran / science"),
+    ("14h00", "💼 Business"),
+    ("15h00", "🏢 Sopra (dispo, réunions)"),
+    ("17h30", "😴 Sieste"),
+    ("20h00", "🎯 Temps libre"),
+    ("21h45", "Maghreb"),
+    ("22h00", "Coran / science"),
+    ("23h30", "Icha"),
+    ("00h00", "💤 Sommeil"),
+]
+
+
 # ── Entry points ──────────────────────────────────────────────────────────────
+
+async def btn_routine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not _allowed(update):
+        return ConversationHandler.END
+    lines = ["📅 Routine du jour\n"]
+    for heure, activite in ROUTINE:
+        lines.append(f"{heure}  {activite}")
+    await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
+
 
 async def btn_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not _allowed(update):
@@ -277,12 +308,6 @@ async def receive_expense_amount(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("Le montant doit être positif. Réessaie.")
         return WAITING_EXPENSE_AMOUNT
     context.user_data["expense_amount"] = amount
-    await update.message.reply_text("Description ?", reply_markup=MAIN_KEYBOARD)
-    return WAITING_EXPENSE_DESC
-
-
-async def receive_expense_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["expense_desc"] = update.message.text.strip()
     await update.message.reply_text("Catégorie ?", reply_markup=_category_keyboard())
     return WAITING_EXPENSE_CATEGORY
 
@@ -319,11 +344,10 @@ async def receive_expense_date_input(update: Update, context: ContextTypes.DEFAU
 
 async def _finalize_expense(update: Update, context: ContextTypes.DEFAULT_TYPE, d: Date | None) -> int:
     amount = context.user_data.pop("expense_amount")
-    description = context.user_data.pop("expense_desc")
     category = context.user_data.pop("expense_category")
     account_name = context.user_data.pop("expense_account", None)
-    insert_expense(amount, description, category, account_name, d)
-    msg = _format_confirmation("expense", amount, description, category, account_name, d)
+    insert_expense(amount, "", category, account_name, d)
+    msg = _format_confirmation("expense", amount, category, account_name, d)
     await update.message.reply_text(msg, reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
@@ -341,12 +365,6 @@ async def receive_income_amount(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Le montant doit être positif. Réessaie.")
         return WAITING_INCOME_AMOUNT
     context.user_data["income_amount"] = amount
-    await update.message.reply_text("Description ?", reply_markup=MAIN_KEYBOARD)
-    return WAITING_INCOME_DESC
-
-
-async def receive_income_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["income_desc"] = update.message.text.strip()
     await update.message.reply_text("Catégorie ?", reply_markup=_category_keyboard())
     return WAITING_INCOME_CATEGORY
 
@@ -390,12 +408,11 @@ async def receive_income_date_input(update: Update, context: ContextTypes.DEFAUL
 
 async def _finalize_income(update: Update, context: ContextTypes.DEFAULT_TYPE, d: Date | None) -> int:
     amount = context.user_data.pop("income_amount")
-    description = context.user_data.pop("income_desc")
     category = context.user_data.pop("income_category")
     account_name = context.user_data.pop("income_account", None)
     project_name = context.user_data.pop("income_project", None)
-    insert_income(amount, description, category, account_name, d, project_name)
-    msg = _format_confirmation("income", amount, description, category, account_name, d)
+    insert_income(amount, "", category, account_name, d, project_name)
+    msg = _format_confirmation("income", amount, category, account_name, d)
     if project_name:
         msg += f" | {project_name}"
     await update.message.reply_text(msg, reply_markup=MAIN_KEYBOARD)
@@ -630,18 +647,17 @@ def build_conversation_handler() -> ConversationHandler:
         MessageHandler(filters.Regex(f"^{BTN_CHARGES}$"), btn_charges),
         MessageHandler(filters.Regex(f"^{BTN_PROJECTS}$"), btn_projects),
         MessageHandler(filters.Regex(f"^{BTN_ACCOUNTS}$"), btn_accounts),
+        MessageHandler(filters.Regex(f"^{BTN_ROUTINE}$"), btn_routine),
     ]
     return ConversationHandler(
         entry_points=nav,
         states={
             WAITING_EXPENSE_AMOUNT:     nav + [MessageHandler(btn_filter, receive_expense_amount)],
-            WAITING_EXPENSE_DESC:       nav + [MessageHandler(btn_filter, receive_expense_desc)],
             WAITING_EXPENSE_CATEGORY:   nav + [MessageHandler(btn_filter, receive_expense_category)],
             WAITING_EXPENSE_ACCOUNT:    nav + [MessageHandler(btn_filter, receive_expense_account)],
             WAITING_EXPENSE_DATE:       nav + [MessageHandler(btn_filter, receive_expense_date)],
             WAITING_EXPENSE_DATE_INPUT: nav + [MessageHandler(btn_filter, receive_expense_date_input)],
             WAITING_INCOME_AMOUNT:      nav + [MessageHandler(btn_filter, receive_income_amount)],
-            WAITING_INCOME_DESC:        nav + [MessageHandler(btn_filter, receive_income_desc)],
             WAITING_INCOME_CATEGORY:    nav + [MessageHandler(btn_filter, receive_income_category)],
             WAITING_INCOME_ACCOUNT:     nav + [MessageHandler(btn_filter, receive_income_account)],
             WAITING_INCOME_PROJECT:     nav + [MessageHandler(btn_filter, receive_income_project)],
