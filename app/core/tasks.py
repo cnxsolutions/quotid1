@@ -34,13 +34,17 @@ def get_pending_tasks() -> list:
 
 
 def get_tasks_due_tomorrow() -> list:
+    return get_tasks_due_in_days(1)
+
+
+def get_tasks_due_in_days(days: int) -> list:
     from datetime import date, timedelta
-    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    target = (date.today() + timedelta(days=days)).isoformat()
     result = (
         supabase.table("tasks")
         .select("id, description, due_date, projects(name)")
         .eq("done", False)
-        .eq("due_date", tomorrow)
+        .eq("due_date", target)
         .execute()
     )
     tasks = []
