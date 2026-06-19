@@ -14,3 +14,7 @@ def insert_expense(amount: float, description: str = "", category: str | None = 
         row["account_id"] = account_id
     supabase.table("expenses").insert(row).execute()
     return True if account_name is not None else None
+
+
+def get_recent_expenses(n: int = 5) -> list:
+    return supabase.table("expenses").select("amount,category,date").order("date", desc=True).limit(n).execute().data

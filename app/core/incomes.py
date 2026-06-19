@@ -19,3 +19,7 @@ def insert_income(amount: float, description: str = "", category: str | None = N
         row["account_id"] = account_id
     supabase.table("incomes").insert(row).execute()
     return True if account_name is not None else None
+
+
+def get_recent_incomes(n: int = 5) -> list:
+    return supabase.table("incomes").select("amount,category,date").order("date", desc=True).limit(n).execute().data

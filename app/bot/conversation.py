@@ -2,8 +2,8 @@ from datetime import date as Date
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
 from app.core.config import TELEGRAM_ALLOWED_USER_ID
-from app.core.expenses import insert_expense
-from app.core.incomes import insert_income
+from app.core.expenses import insert_expense, get_recent_expenses
+from app.core.incomes import insert_income, get_recent_incomes
 from app.core.tasks import insert_task, get_pending_tasks, mark_done, get_tasks_due_tomorrow
 from app.core.accounts import get_accounts, get_default_account, insert_account
 from app.core.utils import CATEGORIES, parse_date
@@ -29,6 +29,16 @@ BTN_TODAY_DATE = "Aujourd'hui"
 BTN_YESTERDAY = "Hier"
 BTN_CUSTOM_DATE = "Saisir une date"
 BTN_ROUTINE = "📅 Routine"
+BTN_NEW_EXPENSE = "Nouvelle dépense"
+BTN_EXPENSE_HISTORY = "Historique dépenses"
+BTN_NEW_INCOME = "Nouveau revenu"
+BTN_INCOME_HISTORY = "Historique revenus"
+BTN_NEW_TASK = "Nouvelle tâche"
+BTN_TASK_DONE_MENU = "Terminer une tâche"
+BTN_BACK = "⬅️ Retour"
+BTN_ACCOUNTS_BALANCE = "Soldes des comptes"
+BTN_PROJECTS_LIST = "Liste des projets"
+BTN_CHARGES_LIST = "Liste des charges"
 
 (
     WAITING_EXPENSE_AMOUNT,
@@ -56,7 +66,13 @@ BTN_ROUTINE = "📅 Routine"
     WAITING_TASK_PROJECT,
     WAITING_TASK_DUE,
     WAITING_TASK_DUE_INPUT,
-) = range(25)
+    WAITING_EXPENSE_MENU,
+    WAITING_INCOME_MENU,
+    WAITING_TASK_MENU,
+    WAITING_CHARGES_MENU,
+    WAITING_PROJECTS_MENU,
+    WAITING_ACCOUNTS_MENU,
+) = range(31)
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -76,6 +92,36 @@ FREQ_KEYBOARD = ReplyKeyboardMarkup(
 
 DATE_KEYBOARD = ReplyKeyboardMarkup(
     [[BTN_TODAY_DATE, BTN_YESTERDAY], [BTN_CUSTOM_DATE]],
+    resize_keyboard=True,
+)
+
+EXPENSE_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_NEW_EXPENSE, BTN_EXPENSE_HISTORY], [BTN_BACK]],
+    resize_keyboard=True,
+)
+
+INCOME_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_NEW_INCOME, BTN_INCOME_HISTORY], [BTN_BACK]],
+    resize_keyboard=True,
+)
+
+TASK_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_NEW_TASK], [BTN_TODAY, BTN_TASK_DONE_MENU], [BTN_BACK]],
+    resize_keyboard=True,
+)
+
+CHARGES_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_NEW_CHARGE, BTN_CHARGES_LIST], [BTN_BACK]],
+    resize_keyboard=True,
+)
+
+PROJECTS_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_NEW_PROJECT, BTN_PROJECTS_LIST], [BTN_BACK]],
+    resize_keyboard=True,
+)
+
+ACCOUNTS_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_NEW_ACCOUNT, BTN_ACCOUNTS_BALANCE], [BTN_BACK]],
     resize_keyboard=True,
 )
 
@@ -125,22 +171,18 @@ def _format_confirmation(kind: str, amount: float, category: str | None, account
 
 
 ROUTINE = [
-    ("04h15", "Réveil"),
-    ("04h30", "Fajr à la mosquée"),
-    ("05h00", "Coran / science"),
-    ("06h00", "🏢 Sopra (deep work)"),
-    ("08h00", "💼 Business"),
-    ("10h00", "🏢 Sopra"),
-    ("12h00", "🏋️ Basic Fit + repas"),
-    ("13h30", "Coran / science"),
-    ("14h00", "💼 Business"),
-    ("15h00", "🏢 Sopra (dispo, réunions)"),
-    ("17h30", "😴 Sieste"),
-    ("20h00", "🎯 Temps libre"),
-    ("21h45", "Maghreb"),
-    ("22h00", "Coran / science"),
     ("23h30", "Icha"),
-    ("00h00", "💤 Sommeil"),
+    ("00h00", "Coran / science"),
+    ("01h00", "💼 Business"),
+    ("03h00", "Préparation Fajr, adhkar"),
+    ("03h40", "🕌 Fajr"),
+    ("04h30", "💤 Sommeil principal (5h30)"),
+    ("10h00", "🏢 Sopra"),
+    ("12h00", "🏋️ Sport + repas"),
+    ("13h30", "🏢 Sopra"),
+    ("17h30", "😴 Sieste (1h30)"),
+    ("19h00", "🎯 Temps libre / famille"),
+    ("21h45", "Maghreb"),
 ]
 
 
@@ -159,22 +201,81 @@ async def btn_routine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def btn_expense(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not _allowed(update):
         return ConversationHandler.END
-    await update.message.reply_text("Montant ?", reply_markup=MAIN_KEYBOARD)
-    return WAITING_EXPENSE_AMOUNT
+    await update.message.reply_text("💸 Dépenses", reply_markup=EXPENSE_MENU_KEYBOARD)
+    return WAITING_EXPENSE_MENU
+
+
+async def receive_expense_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.strip()
+    if raw == BTN_NEW_EXPENSE:
+        await update.message.reply_text("Montant ?", reply_markup=MAIN_KEYBOARD)
+        return WAITING_EXPENSE_AMOUNT
+    if raw == BTN_EXPENSE_HISTORY:
+        expenses = get_recent_expenses(5)
+        if not expenses:
+            await update.message.reply_text("Aucune dépense enregistrée.", reply_markup=MAIN_KEYBOARD)
+        else:
+            lines = [f"{e['date']} — {float(e['amount']):.2f} € {e.get('category') or ''}" for e in expenses]
+            await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+    await update.message.reply_text("Menu principal.", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
 
 
 async def btn_income(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not _allowed(update):
         return ConversationHandler.END
-    await update.message.reply_text("Montant ?", reply_markup=MAIN_KEYBOARD)
-    return WAITING_INCOME_AMOUNT
+    await update.message.reply_text("💰 Revenus", reply_markup=INCOME_MENU_KEYBOARD)
+    return WAITING_INCOME_MENU
+
+
+async def receive_income_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.strip()
+    if raw == BTN_NEW_INCOME:
+        await update.message.reply_text("Montant ?", reply_markup=MAIN_KEYBOARD)
+        return WAITING_INCOME_AMOUNT
+    if raw == BTN_INCOME_HISTORY:
+        incomes = get_recent_incomes(5)
+        if not incomes:
+            await update.message.reply_text("Aucun revenu enregistré.", reply_markup=MAIN_KEYBOARD)
+        else:
+            lines = [f"{i['date']} — {float(i['amount']):.2f} € {i.get('category') or ''}" for i in incomes]
+            await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+    await update.message.reply_text("Menu principal.", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
 
 
 async def btn_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not _allowed(update):
         return ConversationHandler.END
-    await update.message.reply_text("Description de la tâche ?", reply_markup=MAIN_KEYBOARD)
-    return WAITING_TASK
+    await update.message.reply_text("✅ Tâches", reply_markup=TASK_MENU_KEYBOARD)
+    return WAITING_TASK_MENU
+
+
+async def receive_task_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.strip()
+    if raw == BTN_NEW_TASK:
+        await update.message.reply_text("Description de la tâche ?", reply_markup=MAIN_KEYBOARD)
+        return WAITING_TASK
+    if raw == BTN_TODAY:
+        tasks = get_pending_tasks()
+        if not tasks:
+            await update.message.reply_text("Aucune tâche en cours.", reply_markup=MAIN_KEYBOARD)
+        else:
+            await update.message.reply_text(_format_tasks(tasks), reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+    if raw == BTN_TASK_DONE_MENU:
+        tasks = get_pending_tasks()
+        if not tasks:
+            await update.message.reply_text("Aucune tâche en cours.", reply_markup=MAIN_KEYBOARD)
+            return ConversationHandler.END
+        rows = [[f"{t['id']}. {t['description']}"] for t in tasks]
+        rows.append([BTN_SKIP])
+        await update.message.reply_text("Quelle tâche terminer ?", reply_markup=ReplyKeyboardMarkup(rows, resize_keyboard=True))
+        return WAITING_DONE_SELECT
+    await update.message.reply_text("Menu principal.", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
 
 
 def _format_tasks(tasks: list) -> str:
@@ -490,17 +591,25 @@ async def _finalize_task(update: Update, context: ContextTypes.DEFAULT_TYPE, due
 async def btn_charges(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not _allowed(update):
         return ConversationHandler.END
-    charges = get_charges()
-    if charges:
-        lines = [f"{c['name']} : {float(c['amount']):.2f} € / {c['frequency']}" for c in charges]
-        lines.append("")
-        lines.append("— Nouvelle charge ?")
-        text = "\n".join(lines)
-    else:
-        text = "Aucune charge. Créer la première ?"
-    keyboard = ReplyKeyboardMarkup([[BTN_NEW_CHARGE], [BTN_SKIP]], resize_keyboard=True)
-    await update.message.reply_text(text, reply_markup=keyboard)
-    return WAITING_CHARGE_NAME
+    await update.message.reply_text("📦 Charges", reply_markup=CHARGES_MENU_KEYBOARD)
+    return WAITING_CHARGES_MENU
+
+
+async def receive_charges_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.strip()
+    if raw == BTN_NEW_CHARGE:
+        await update.message.reply_text("Nom de la charge ?", reply_markup=MAIN_KEYBOARD)
+        return WAITING_CHARGE_NAME
+    if raw == BTN_CHARGES_LIST:
+        charges = get_charges()
+        if not charges:
+            await update.message.reply_text("Aucune charge enregistrée.", reply_markup=MAIN_KEYBOARD)
+        else:
+            lines = [f"{c['name']} : {float(c['amount']):.2f} € / {c['frequency']}" for c in charges]
+            await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+    await update.message.reply_text("Menu principal.", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
 
 
 async def receive_charge_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -508,9 +617,6 @@ async def receive_charge_name(update: Update, context: ContextTypes.DEFAULT_TYPE
     if raw == BTN_SKIP:
         await update.message.reply_text("Annulé.", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
-    if raw == BTN_NEW_CHARGE:
-        await update.message.reply_text("Nom de la charge ?", reply_markup=MAIN_KEYBOARD)
-        return WAITING_CHARGE_NAME
     context.user_data["charge_name"] = raw
     await update.message.reply_text("Montant ?", reply_markup=MAIN_KEYBOARD)
     return WAITING_CHARGE_AMOUNT
@@ -559,17 +665,25 @@ async def receive_charge_account(update: Update, context: ContextTypes.DEFAULT_T
 async def btn_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not _allowed(update):
         return ConversationHandler.END
-    accounts = get_accounts()
-    if accounts:
-        lines = [f"{a['name']} : {float(a['balance']):.2f} €" for a in accounts]
-        lines.append("")
-        lines.append("— Nouveau compte ?")
-        text = "\n".join(lines)
-    else:
-        text = "Aucun compte. Créer le premier ?"
-    keyboard = ReplyKeyboardMarkup([[BTN_NEW_ACCOUNT], [BTN_SKIP]], resize_keyboard=True)
-    await update.message.reply_text(text, reply_markup=keyboard)
-    return WAITING_ACCOUNT_NAME
+    await update.message.reply_text("🏦 Comptes", reply_markup=ACCOUNTS_MENU_KEYBOARD)
+    return WAITING_ACCOUNTS_MENU
+
+
+async def receive_accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.strip()
+    if raw == BTN_NEW_ACCOUNT:
+        await update.message.reply_text("Nom du compte ?", reply_markup=MAIN_KEYBOARD)
+        return WAITING_ACCOUNT_NAME
+    if raw == BTN_ACCOUNTS_BALANCE:
+        accounts = get_accounts()
+        if not accounts:
+            await update.message.reply_text("Aucun compte trouvé.", reply_markup=MAIN_KEYBOARD)
+        else:
+            lines = [f"{a['name']} : {float(a['balance']):.2f} €" for a in accounts]
+            await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+    await update.message.reply_text("Menu principal.", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
 
 
 async def receive_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -577,9 +691,6 @@ async def receive_account_name(update: Update, context: ContextTypes.DEFAULT_TYP
     if raw == BTN_SKIP:
         await update.message.reply_text("Annulé.", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
-    if raw == BTN_NEW_ACCOUNT:
-        await update.message.reply_text("Nom du compte ?", reply_markup=MAIN_KEYBOARD)
-        return WAITING_ACCOUNT_NAME
     context.user_data["account_name"] = raw
     await update.message.reply_text("Solde initial (0 si vide) ?", reply_markup=MAIN_KEYBOARD)
     return WAITING_ACCOUNT_BALANCE
@@ -603,20 +714,28 @@ async def receive_account_balance(update: Update, context: ContextTypes.DEFAULT_
 async def btn_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not _allowed(update):
         return ConversationHandler.END
-    projects = get_projects()
-    if projects:
-        lines = []
-        for p in projects:
-            s = get_project_summary(p["name"])
-            lines.append(f"{p['name']} : {s['total']:.2f} € ({s['count']} revenus)")
-        lines.append("")
-        lines.append("— Nouveau projet ?")
-        text = "\n".join(lines)
-    else:
-        text = "Aucun projet. Créer le premier ?"
-    keyboard = ReplyKeyboardMarkup([[BTN_NEW_PROJECT], [BTN_SKIP]], resize_keyboard=True)
-    await update.message.reply_text(text, reply_markup=keyboard)
-    return WAITING_PROJECT_NAME
+    await update.message.reply_text("🗂 Projets", reply_markup=PROJECTS_MENU_KEYBOARD)
+    return WAITING_PROJECTS_MENU
+
+
+async def receive_projects_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.strip()
+    if raw == BTN_NEW_PROJECT:
+        await update.message.reply_text("Nom du projet ?", reply_markup=MAIN_KEYBOARD)
+        return WAITING_PROJECT_NAME
+    if raw == BTN_PROJECTS_LIST:
+        projects = get_projects()
+        if not projects:
+            await update.message.reply_text("Aucun projet.", reply_markup=MAIN_KEYBOARD)
+        else:
+            lines = []
+            for p in projects:
+                s = get_project_summary(p["name"])
+                lines.append(f"{p['name']} : {s['total']:.2f} € ({s['count']} revenus)")
+            await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
+        return ConversationHandler.END
+    await update.message.reply_text("Menu principal.", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
 
 
 async def receive_project_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -624,9 +743,6 @@ async def receive_project_name(update: Update, context: ContextTypes.DEFAULT_TYP
     if raw == BTN_SKIP:
         await update.message.reply_text("Annulé.", reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
-    if raw == BTN_NEW_PROJECT:
-        await update.message.reply_text("Nom du projet ?", reply_markup=MAIN_KEYBOARD)
-        return WAITING_PROJECT_NAME
     insert_project(raw.upper())
     await update.message.reply_text(f"Projet créé : {raw.upper()}", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
@@ -652,27 +768,33 @@ def build_conversation_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=nav,
         states={
+            WAITING_EXPENSE_MENU:       nav + [MessageHandler(btn_filter, receive_expense_menu)],
             WAITING_EXPENSE_AMOUNT:     nav + [MessageHandler(btn_filter, receive_expense_amount)],
             WAITING_EXPENSE_CATEGORY:   nav + [MessageHandler(btn_filter, receive_expense_category)],
             WAITING_EXPENSE_ACCOUNT:    nav + [MessageHandler(btn_filter, receive_expense_account)],
             WAITING_EXPENSE_DATE:       nav + [MessageHandler(btn_filter, receive_expense_date)],
             WAITING_EXPENSE_DATE_INPUT: nav + [MessageHandler(btn_filter, receive_expense_date_input)],
+            WAITING_INCOME_MENU:        nav + [MessageHandler(btn_filter, receive_income_menu)],
             WAITING_INCOME_AMOUNT:      nav + [MessageHandler(btn_filter, receive_income_amount)],
             WAITING_INCOME_CATEGORY:    nav + [MessageHandler(btn_filter, receive_income_category)],
             WAITING_INCOME_ACCOUNT:     nav + [MessageHandler(btn_filter, receive_income_account)],
             WAITING_INCOME_PROJECT:     nav + [MessageHandler(btn_filter, receive_income_project)],
             WAITING_INCOME_DATE:        nav + [MessageHandler(btn_filter, receive_income_date)],
             WAITING_INCOME_DATE_INPUT:  nav + [MessageHandler(btn_filter, receive_income_date_input)],
+            WAITING_TASK_MENU:          nav + [MessageHandler(btn_filter, receive_task_menu)],
             WAITING_TASK:               nav + [MessageHandler(btn_filter, receive_task)],
             WAITING_TASK_PROJECT:       nav + [MessageHandler(btn_filter, receive_task_project)],
             WAITING_TASK_DUE:           nav + [MessageHandler(btn_filter, receive_task_due)],
             WAITING_TASK_DUE_INPUT:     nav + [MessageHandler(btn_filter, receive_task_due_input)],
             WAITING_DONE_SELECT:        nav + [MessageHandler(btn_filter, receive_done_select)],
+            WAITING_CHARGES_MENU:       nav + [MessageHandler(btn_filter, receive_charges_menu)],
             WAITING_CHARGE_NAME:        nav + [MessageHandler(btn_filter, receive_charge_name)],
             WAITING_CHARGE_AMOUNT:      nav + [MessageHandler(btn_filter, receive_charge_amount)],
             WAITING_CHARGE_FREQ:        nav + [MessageHandler(btn_filter, receive_charge_freq)],
             WAITING_CHARGE_ACCOUNT:     nav + [MessageHandler(btn_filter, receive_charge_account)],
+            WAITING_PROJECTS_MENU:      nav + [MessageHandler(btn_filter, receive_projects_menu)],
             WAITING_PROJECT_NAME:       nav + [MessageHandler(btn_filter, receive_project_name)],
+            WAITING_ACCOUNTS_MENU:      nav + [MessageHandler(btn_filter, receive_accounts_menu)],
             WAITING_ACCOUNT_NAME:       nav + [MessageHandler(btn_filter, receive_account_name)],
             WAITING_ACCOUNT_BALANCE:    nav + [MessageHandler(btn_filter, receive_account_balance)],
         },
