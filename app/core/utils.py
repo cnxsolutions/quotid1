@@ -1,7 +1,7 @@
 import re
 from datetime import date, timedelta
 
-CATEGORIES = ["Food", "Transport", "Logement", "Business", "Abonnement", "Loisir", "Santé", "Autre"]
+CATEGORIES = ["Food", "Transport", "Logement", "Business", "Charges", "Abonnement", "Loisir", "Santé", "Autre"]
 _CATEGORIES_LOWER = {c.lower(): c for c in CATEGORIES}
 _CATEGORIES_HINT = ", ".join(CATEGORIES)
 

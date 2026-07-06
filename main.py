@@ -4,12 +4,11 @@ from zoneinfo import ZoneInfo
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from app.core.config import TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_ID
-from app.bot.handlers import start, dep, rev, todo, today, done, cash, mois, message_handler
-from app.bot.conversation import build_conversation_handler
-from app.core.charges import apply_monthly_charges
+from app.bot.handlers import start, message_handler
+from app.bot.conversation import build_conversation_handler, _format_tasks, _format_tasks_report
 from app.core.tasks import get_pending_tasks, get_tasks_due_tomorrow, get_tasks_due_in_days
-from app.bot.conversation import _format_tasks
 from app.core.weekly_report import generate_weekly_report
+from app.core.hadith import get_random_hadith, format_hadith
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -22,19 +21,11 @@ async def _error_handler(update, context) -> None:
     logging.error("Erreur inattendue : %s", context.error)
 
 
-async def _run_monthly_charges(context) -> None:
-    now = datetime.now(timezone.utc)
-    applied = apply_monthly_charges(now.year, now.month)
-    if applied:
-        msg = "📦 Charges du mois appliquées :\n" + "\n".join(f"  • {n}" for n in applied)
-        await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
-
-
 async def _daily_task_report(context) -> None:
     tasks = get_pending_tasks()
     if not tasks:
         return
-    msg = "📋 Tâches du jour :\n\n" + _format_tasks(tasks)
+    msg = _format_tasks_report(tasks, "☀️ BONJOUR — TES TÂCHES")
     await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
 
 
@@ -42,7 +33,13 @@ async def _remind_due_tomorrow(context) -> None:
     tasks = get_tasks_due_tomorrow()
     if not tasks:
         return
-    msg = "⏰ Rappel — échéance demain :\n\n" + _format_tasks(tasks)
+    msg = (
+        "╔══════════════════════════════╗\n"
+        "║  ⏰ RAPPEL — ÉCHÉANCE DEMAIN ║\n"
+        "╠══════════════════════════════╣\n"
+    )
+    msg += _format_tasks(tasks)
+    msg += f"\n╚══════════════════════════════╝"
     await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
 
 
@@ -50,14 +47,36 @@ async def _remind_due_in_3_days(context) -> None:
     tasks = get_tasks_due_in_days(3)
     if not tasks:
         return
-    msg = "📅 Échéance dans 3 jours :\n\n" + _format_tasks(tasks)
+    msg = (
+        "╔══════════════════════════════╗\n"
+        "║  📅 ÉCHÉANCE DANS 3 JOURS    ║\n"
+        "╠══════════════════════════════╣\n"
+    )
+    msg += _format_tasks(tasks)
+    msg += f"\n╚══════════════════════════════╝"
+    await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
+
+
+async def _daily_hadith(context) -> None:
+    h = get_random_hadith()
+    if not h:
+        return
+    msg = format_hadith(h)
     await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
 
 
 async def _weekly_ai_report(context) -> None:
     try:
         report = generate_weekly_report()
-        msg = "📊 Rapport hebdomadaire IA\n\n" + report
+        msg = (
+            "╔══════════════════════════════╗\n"
+            "║  📊 RAPPORT HEBDO IA         ║\n"
+            "╠══════════════════════════════╣\n"
+            "\n"
+            f"{report}\n"
+            "\n"
+            "╚══════════════════════════════╝"
+        )
         await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         logging.error("Erreur rapport hebdomadaire : %s", e)
@@ -67,21 +86,9 @@ def main() -> None:
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_error_handler(_error_handler)
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("dep", dep))
-    app.add_handler(CommandHandler("rev", rev))
-    app.add_handler(CommandHandler("todo", todo))
-    app.add_handler(CommandHandler("today", today))
-    app.add_handler(CommandHandler("done", done))
-    app.add_handler(CommandHandler("cash", cash))
-    app.add_handler(CommandHandler("mois", mois))
     app.add_handler(build_conversation_handler())
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    app.job_queue.run_monthly(
-        _run_monthly_charges,
-        when=time(8, 0, tzinfo=PARIS),
-        day=1,
-    )
-    app.job_queue.run_once(_run_monthly_charges, when=5)
+    app.job_queue.run_daily(_daily_hadith, time=time(4, 30, tzinfo=PARIS))
     app.job_queue.run_daily(_daily_task_report, time=time(5, 0, tzinfo=PARIS))
     app.job_queue.run_daily(_remind_due_tomorrow, time=time(20, 0, tzinfo=PARIS))
     app.job_queue.run_daily(_remind_due_in_3_days, time=time(20, 0, tzinfo=PARIS))
