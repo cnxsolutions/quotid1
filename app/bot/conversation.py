@@ -22,6 +22,7 @@ BTN_EXPENSE = "💸 Dépense"
 BTN_INCOME = "💰 Revenu"
 BTN_CASH = "💳 Soldes"
 BTN_CHARGES = "📦 Charges fixes"
+BTN_HISTORY = "🕘 Historique"
 
 BTN_NEW_TASK = "➕ Nouvelle tâche"
 BTN_TODAY = "📋 Mes tâches"
@@ -90,6 +91,7 @@ FINANCE_KEYBOARD = ReplyKeyboardMarkup(
     [
         [BTN_EXPENSE, BTN_INCOME],
         [BTN_CASH, BTN_CHARGES],
+        [BTN_HISTORY],
         [BTN_BACK],
     ],
     resize_keyboard=True,
@@ -258,6 +260,35 @@ def _format_charges_display() -> str:
     return "\n".join(lines)
 
 
+def _format_finance_history(n: int = 5) -> str:
+    expenses = get_recent_expenses(n)
+    incomes = get_recent_incomes(n)
+
+    lines = ["🕘 HISTORIQUE FINANCIER", ""]
+
+    if incomes:
+        lines.append("Revenus récents")
+        for row in incomes:
+            date_text = row.get("date") or "-"
+            category = row.get("category") or "Sans catégorie"
+            lines.append(f"- {date_text} | {float(row['amount']):.2f} € | {category}")
+    else:
+        lines.append("Revenus récents")
+        lines.append("- Aucun revenu récent")
+
+    lines.append("")
+    lines.append("Dépenses récentes")
+    if expenses:
+        for row in expenses:
+            date_text = row.get("date") or "-"
+            category = row.get("category") or "Sans catégorie"
+            lines.append(f"- {date_text} | {float(row['amount']):.2f} € | {category}")
+    else:
+        lines.append("- Aucune dépense récente")
+
+    return "\n".join(lines)
+
+
 def _build_summary_lines(s: dict, month: int, year: int) -> list[str]:
     import calendar
     month_name = calendar.month_name[month].capitalize()
@@ -296,7 +327,7 @@ def _build_summary_lines(s: dict, month: int, year: int) -> list[str]:
         for a in s["accounts"]:
             lines.append(f"  {a['name']:<12} {a['balance']:>8.2f} €")
         if len(s["accounts"]) > 1:
-            lines.append(f"  {'TOTAL':<12} {total_balance:>8.2f} €")
+            lines.append(f"  TOTAL        {total_balance:>8.2f} €")
 
     return lines
 
@@ -346,13 +377,17 @@ async def receive_finance_menu(update: Update, context: ContextTypes.DEFAULT_TYP
             for a in accounts:
                 lines.append(f"{a['name']:<12} {float(a['balance']):>8.2f} €")
             if len(accounts) > 1:
-                lines.append("─" * 20)
+                lines.append("")
                 lines.append(f"{'TOTAL':<12} {total:>8.2f} €")
             await update.message.reply_text("\n".join(lines), reply_markup=FINANCE_KEYBOARD)
         return WAITING_FINANCE_MENU
 
     if raw == BTN_CHARGES:
         await update.message.reply_text(_format_charges_display(), reply_markup=FINANCE_KEYBOARD)
+        return WAITING_FINANCE_MENU
+
+    if raw == BTN_HISTORY:
+        await update.message.reply_text(_format_finance_history(), reply_markup=FINANCE_KEYBOARD)
         return WAITING_FINANCE_MENU
 
     if raw == BTN_BACK:

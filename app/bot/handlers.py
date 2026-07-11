@@ -1,7 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from app.core.config import TELEGRAM_ALLOWED_USER_ID
-from app.bot.conversation import MAIN_KEYBOARD
+from app.bot.conversation import MAIN_KEYBOARD, BTN_FINANCE, BTN_TASKS, BTN_GESTION, BTN_SUMMARY, BTN_HISTORY
 from app.core.expenses import insert_expense
 from app.core.incomes import insert_income
 from app.core.tasks import insert_task, get_pending_tasks, mark_done
@@ -9,14 +9,14 @@ from app.core.accounts import get_accounts
 from app.core.interpreter import interpret
 
 
+_NAVIGATION_BUTTONS = {BTN_FINANCE, BTN_TASKS, BTN_GESTION, BTN_SUMMARY, BTN_HISTORY}
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != TELEGRAM_ALLOWED_USER_ID:
         return
     await update.message.reply_text(
-        "┌─────────────────────┐\n"
-        "│   🏠 MENU PRINCIPAL  │\n"
-        "└─────────────────────┘\n"
-        "Bot opérationnel ✓",
+        "🏠 MENU PRINCIPAL\n\nBot opérationnel ✓",
         reply_markup=MAIN_KEYBOARD,
     )
 
@@ -26,6 +26,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     text = update.message.text.strip()
+
+    if text in _NAVIGATION_BUTTONS:
+        return
 
     try:
         intent = interpret(text)
