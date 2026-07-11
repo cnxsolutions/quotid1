@@ -205,18 +205,18 @@ def _format_tasks(tasks: list) -> str:
             elif delta <= 3:
                 badge = "🟠"
             else:
-                badge = "⚪"
+                badge = "○"
         else:
-            badge = "⚪"
+            badge = "○"
 
-        line = f"  {badge} {t['id']}. {t['description']}"
+        line = f"{badge} {t['id']}. {t['description']}"
         if t.get("project_name"):
-            line += f" 〔{t['project_name']}〕"
+            line += f" [{t['project_name']}]"
         if t.get("due_date"):
             due = _date.fromisoformat(t["due_date"])
             delta = (due - today).days
             if delta < 0:
-                line += f"  ← ⚠️ {abs(delta)}j retard"
+                line += f"  ← en retard {abs(delta)}j"
             elif delta == 0:
                 line += f"  ← aujourd'hui"
             elif delta == 1:
@@ -228,16 +228,11 @@ def _format_tasks(tasks: list) -> str:
 
 
 def _format_tasks_report(tasks: list, title: str) -> str:
-    header = (
-        "╔══════════════════════════════╗\n"
-        f"║  {title:<27}║\n"
-        "╠══════════════════════════════╣\n"
-    )
+    header = f"☀️ {title}\n\n"
     body = _format_tasks(tasks)
-    footer = "\n╚══════════════════════════════╝"
     count = len(tasks)
-    summary = f"\n  📌 {count} tâche{'s' if count > 1 else ''}"
-    return header + body + summary + footer
+    summary = f"\n\n📌 {count} tâche{'s' if count > 1 else ''} au total"
+    return header + body + summary
 
 
 def _format_charges_display() -> str:
@@ -245,23 +240,21 @@ def _format_charges_display() -> str:
     if not charges:
         return "Aucune charge enregistrée."
     total_mensuel = 0.0
-    lines = ["╔══════════════════════════════╗", "║       📦 CHARGES FIXES       ║", "╠══════════════════════════════╣"]
+    lines = ["📦 CHARGES FIXES", ""]
     for c in charges:
         amount = float(c["amount"])
         freq = c["frequency"]
         mensuel = amount if freq == "Mensuel" else amount / 12
         total_mensuel += mensuel
-        lines.append(f"║  {c['name']}")
-        lines.append(f"║    → {amount:.2f} € / {freq}")
+        lines.append(f"{c['name']}")
+        lines.append(f"  → {amount:.2f} € / {freq}")
         if c.get("account_name"):
-            lines.append(f"║    📌 {c['account_name']}")
-        lines.append("║")
-    lines.append("╠══════════════════════════════╣")
-    lines.append(f"║  💰 Total mensuel : {total_mensuel:.2f} €")
-    lines.append(f"║  📅 Total annuel  : {total_mensuel * 12:.2f} €")
-    lines.append("╚══════════════════════════════╝")
+            lines.append(f"  📌 {c['account_name']}")
+        lines.append("")
+    lines.append(f"💰 Total mensuel : {total_mensuel:.2f} €")
+    lines.append(f"📅 Total annuel  : {total_mensuel * 12:.2f} €")
     lines.append("")
-    lines.append("💡 Quand débité → enregistrer en dépense catégorie « Charges »")
+    lines.append("Quand débité → enregistrer en dépense catégorie « Charges »")
     return "\n".join(lines)
 
 
@@ -270,45 +263,41 @@ def _build_summary_lines(s: dict, month: int, year: int) -> list[str]:
     month_name = calendar.month_name[month].capitalize()
     sign = "+" if s["cashflow"] >= 0 else ""
     lines = [
-        "╔══════════════════════════════╗",
-        f"║    📊 RÉSUMÉ {month_name.upper()} {year}",
-        "╠══════════════════════════════╣",
-        "║",
-        f"║  💰 Revenus    {s['incomes']:>9.2f} € {s['delta_incomes']}",
-        f"║  💸 Dépenses   {s['expenses']:>9.2f} € {s['delta_expenses']}",
-        f"║  📦 Charges    {s['charges']:>9.2f} € (indicatif)",
-        "║",
-        f"║  {'✅' if s['cashflow'] >= 0 else '⚠️'} Cashflow   {sign}{s['cashflow']:>8.2f} € {s['delta_cashflow']}",
+        f"📊 RÉSUMÉ {month_name.upper()} {year}",
+        "",
+        f"Revenus :    {s['incomes']:>9.2f} € {s['delta_incomes']}",
+        f"Dépenses :  {s['expenses']:>9.2f} € {s['delta_expenses']}",
+        f"Charges :   {s['charges']:>9.2f} € (indicatif)",
+        "",
+        f"{'✓' if s['cashflow'] >= 0 else '⚠'} Cashflow : {sign}{s['cashflow']:>8.2f} € {s['delta_cashflow']}",
     ]
 
     if s.get("projection") is not None:
-        lines.append(f"║  📈 Projection  {s['projection']:.2f} € ({s['days_elapsed']}/{s['days_in_month']}j)")
+        lines.append(f"Projection : {s['projection']:.2f} € ({s['days_elapsed']}/{s['days_in_month']}j)")
 
-    lines.append("║")
-    lines.append(f"║  📅 Semaine    {s['week_expenses']:>9.2f} € {s['delta_week']}")
+    lines.append(f"Semaine :   {s['week_expenses']:>9.2f} € {s['delta_week']}")
 
     if s["by_category"]:
-        lines.append("║")
-        lines.append("╠── Top dépenses ─────────────╣")
+        lines.append("")
+        lines.append("Top dépenses :")
         for cat, total in s["by_category"].items():
-            lines.append(f"║  {cat:<12} {total:>8.2f} €")
+            lines.append(f"  {cat:<12} {total:>8.2f} €")
 
     if s["charges_list"]:
-        lines.append("║")
-        lines.append("╠── Charges fixes ────────────╣")
+        lines.append("")
+        lines.append("Charges fixes :")
         for c in s["charges_list"]:
-            lines.append(f"║  {c['name']:<12} {c['amount']:>7.2f} €/{c['frequency'][:3]}")
+            lines.append(f"  {c['name']:<12} {c['amount']:>7.2f} €/{c['frequency'][:3]}")
 
     if s["accounts"]:
-        lines.append("║")
-        lines.append("╠── Comptes ──────────────────╣")
+        lines.append("")
+        lines.append("Comptes :")
         total_balance = sum(a["balance"] for a in s["accounts"])
         for a in s["accounts"]:
-            lines.append(f"║  {a['name']:<12} {a['balance']:>8.2f} €")
+            lines.append(f"  {a['name']:<12} {a['balance']:>8.2f} €")
         if len(s["accounts"]) > 1:
-            lines.append(f"║  {'TOTAL':<12} {total_balance:>8.2f} €")
+            lines.append(f"  {'TOTAL':<12} {total_balance:>8.2f} €")
 
-    lines.append("╚══════════════════════════════╝")
     return lines
 
 
@@ -318,10 +307,7 @@ async def btn_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not _allowed(update):
         return ConversationHandler.END
     await update.message.reply_text(
-        "┌─────────────────────┐\n"
-        "│   🏠 MENU PRINCIPAL  │\n"
-        "└─────────────────────┘\n"
-        "Choisis une section :",
+        "🏠 MENU PRINCIPAL\n\nChoisis une section :",
         reply_markup=MAIN_KEYBOARD,
     )
     return ConversationHandler.END
@@ -333,9 +319,7 @@ async def btn_finance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not _allowed(update):
         return ConversationHandler.END
     await update.message.reply_text(
-        "┌─────────────────────┐\n"
-        "│    💰 FINANCES       │\n"
-        "└─────────────────────┘",
+        "💰 FINANCES",
         reply_markup=FINANCE_KEYBOARD,
     )
     return WAITING_FINANCE_MENU
@@ -358,13 +342,12 @@ async def receive_finance_menu(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("Aucun compte trouvé.", reply_markup=FINANCE_KEYBOARD)
         else:
             total = sum(float(a["balance"]) for a in accounts)
-            lines = ["╔══════════════════════════════╗", "║       💳 SOLDES COMPTES      ║", "╠══════════════════════════════╣"]
+            lines = ["💳 SOLDES", ""]
             for a in accounts:
-                lines.append(f"║  {a['name']:<12} {float(a['balance']):>8.2f} €")
+                lines.append(f"{a['name']:<12} {float(a['balance']):>8.2f} €")
             if len(accounts) > 1:
-                lines.append("╠══════════════════════════════╣")
-                lines.append(f"║  {'TOTAL':<12} {total:>8.2f} €")
-            lines.append("╚══════════════════════════════╝")
+                lines.append("─" * 20)
+                lines.append(f"{'TOTAL':<12} {total:>8.2f} €")
             await update.message.reply_text("\n".join(lines), reply_markup=FINANCE_KEYBOARD)
         return WAITING_FINANCE_MENU
 
@@ -386,9 +369,7 @@ async def btn_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not _allowed(update):
         return ConversationHandler.END
     await update.message.reply_text(
-        "┌─────────────────────┐\n"
-        "│     ✅ TÂCHES        │\n"
-        "└─────────────────────┘",
+        "✅ TÂCHES",
         reply_markup=TASKS_KEYBOARD,
     )
     return WAITING_TASKS_MENU
@@ -433,9 +414,7 @@ async def btn_gestion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not _allowed(update):
         return ConversationHandler.END
     await update.message.reply_text(
-        "┌─────────────────────┐\n"
-        "│    ⚙️ GESTION        │\n"
-        "└─────────────────────┘",
+        "⚙️ GESTION",
         reply_markup=GESTION_KEYBOARD,
     )
     return WAITING_GESTION_MENU

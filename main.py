@@ -33,13 +33,8 @@ async def _remind_due_tomorrow(context) -> None:
     tasks = get_tasks_due_tomorrow()
     if not tasks:
         return
-    msg = (
-        "╔══════════════════════════════╗\n"
-        "║  ⏰ RAPPEL — ÉCHÉANCE DEMAIN ║\n"
-        "╠══════════════════════════════╣\n"
-    )
+    msg = "⏰ ÉCHÉANCE DEMAIN\n\n"
     msg += _format_tasks(tasks)
-    msg += f"\n╚══════════════════════════════╝"
     await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
 
 
@@ -47,13 +42,8 @@ async def _remind_due_in_3_days(context) -> None:
     tasks = get_tasks_due_in_days(3)
     if not tasks:
         return
-    msg = (
-        "╔══════════════════════════════╗\n"
-        "║  📅 ÉCHÉANCE DANS 3 JOURS    ║\n"
-        "╠══════════════════════════════╣\n"
-    )
+    msg = "📅 ÉCHÉANCE DANS 3 JOURS\n\n"
     msg += _format_tasks(tasks)
-    msg += f"\n╚══════════════════════════════╝"
     await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
 
 
@@ -68,15 +58,7 @@ async def _daily_hadith(context) -> None:
 async def _weekly_ai_report(context) -> None:
     try:
         report = generate_weekly_report()
-        msg = (
-            "╔══════════════════════════════╗\n"
-            "║  📊 RAPPORT HEBDO IA         ║\n"
-            "╠══════════════════════════════╣\n"
-            "\n"
-            f"{report}\n"
-            "\n"
-            "╚══════════════════════════════╝"
-        )
+        msg = f"📊 RAPPORT HEBDOMADAIRE\n\n{report}"
         await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         logging.error("Erreur rapport hebdomadaire : %s", e)
@@ -88,11 +70,13 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(build_conversation_handler())
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    app.job_queue.run_daily(_daily_hadith, time=time(4, 30, tzinfo=PARIS))
-    app.job_queue.run_daily(_daily_task_report, time=time(5, 0, tzinfo=PARIS))
-    app.job_queue.run_daily(_remind_due_tomorrow, time=time(20, 0, tzinfo=PARIS))
-    app.job_queue.run_daily(_remind_due_in_3_days, time=time(20, 0, tzinfo=PARIS))
-    app.job_queue.run_daily(_weekly_ai_report, time=time(8, 0, tzinfo=PARIS), days=(0,))
+
+    # Jobs uniques pour éviter les doublons
+    app.job_queue.run_daily(_daily_hadith, time=time(4, 30, tzinfo=PARIS), name="daily_hadith")
+    app.job_queue.run_daily(_daily_task_report, time=time(5, 0, tzinfo=PARIS), name="daily_tasks")
+    app.job_queue.run_daily(_remind_due_tomorrow, time=time(20, 0, tzinfo=PARIS), name="remind_tomorrow")
+    app.job_queue.run_daily(_remind_due_in_3_days, time=time(20, 0, tzinfo=PARIS), name="remind_3days")
+    app.job_queue.run_daily(_weekly_ai_report, time=time(8, 0, tzinfo=PARIS), days=(0,), name="weekly_report")
     app.run_polling()
 
 
