@@ -1,6 +1,8 @@
+import asyncio
 from datetime import date as Date
 from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
+from telegram.constants import ParseMode
+from telegram.ext import CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 from app.core.config import TELEGRAM_ALLOWED_USER_ID
 from app.core.expenses import insert_expense, get_recent_expenses
 from app.core.incomes import insert_income, get_recent_incomes
@@ -9,7 +11,7 @@ from app.core.accounts import get_accounts, get_default_account, insert_account
 from app.core.utils import CATEGORIES, parse_date
 from app.core.reporting import get_monthly_summary
 from app.core.charges import insert_charge, get_charges
-from app.core.projects import insert_project, get_projects, get_project_summary
+from app.core.projects import insert_project, get_projects, get_projects_with_summary
 
 # ── Boutons ──────────────────────────────────────────────────────────────────
 
@@ -148,6 +150,14 @@ def _allowed(update: Update) -> bool:
     return update.effective_user.id == TELEGRAM_ALLOWED_USER_ID
 
 
+def _escape_code(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("`", "\\`")
+
+
+def _code_block(text: str) -> str:
+    return f"```\n{_escape_code(text)}\n```"
+
+
 def _project_keyboard() -> ReplyKeyboardMarkup:
     projects = get_projects()
     rows = [[p["name"]] for p in projects]
@@ -158,7 +168,7 @@ def _project_keyboard() -> ReplyKeyboardMarkup:
 def _account_keyboard() -> ReplyKeyboardMarkup:
     accounts = get_accounts()
     rows = [[a["name"]] for a in accounts]
-    default = get_default_account()
+    default = accounts[0]["name"] if accounts else None
     label = f"Passer (→ {default})" if default else "Passer"
     rows.append([label])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
@@ -379,7 +389,7 @@ async def receive_finance_menu(update: Update, context: ContextTypes.DEFAULT_TYP
             if len(accounts) > 1:
                 lines.append("")
                 lines.append(f"{'TOTAL':<12} {total:>8.2f} €")
-            await update.message.reply_text("\n".join(lines), reply_markup=FINANCE_KEYBOARD)
+            await update.message.reply_text(_code_block("\n".join(lines)), parse_mode=ParseMode.MARKDOWN_V2, reply_markup=FINANCE_KEYBOARD)
         return WAITING_FINANCE_MENU
 
     if raw == BTN_CHARGES:
@@ -485,9 +495,9 @@ async def btn_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
     from datetime import date as _date
     today = _date.today()
-    s = get_monthly_summary(today.year, today.month)
+    s = await asyncio.to_thread(get_monthly_summary, today.year, today.month)
     lines = _build_summary_lines(s, today.month, today.year)
-    await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(_code_block("\n".join(lines)), parse_mode=ParseMode.MARKDOWN_V2, reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 
@@ -796,14 +806,11 @@ async def receive_projects_menu(update: Update, context: ContextTypes.DEFAULT_TY
         return WAITING_PROJECT_NAME
 
     if raw == BTN_PROJECTS_LIST:
-        projects = get_projects()
-        if not projects:
+        summaries = await asyncio.to_thread(get_projects_with_summary)
+        if not summaries:
             await update.message.reply_text("Aucun projet.", reply_markup=GESTION_KEYBOARD)
         else:
-            lines = []
-            for p in projects:
-                s = get_project_summary(p["name"])
-                lines.append(f"  {p['name']} — {s['total']:.2f} € ({s['count']} revenus)")
+            lines = [f"  {s['name']} — {s['total']:.2f} € ({s['count']} revenus)" for s in summaries]
             await update.message.reply_text("🗂 Projets\n\n" + "\n".join(lines), reply_markup=GESTION_KEYBOARD)
         return WAITING_GESTION_MENU
 
@@ -823,6 +830,24 @@ async def receive_project_name(update: Update, context: ContextTypes.DEFAULT_TYP
     insert_project(raw.upper())
     await update.message.reply_text(f"✅ Projet créé : {raw.upper()}", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
+
+
+# ── Annulation / expiration ──────────────────────────────────────────────────
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    await update.message.reply_text("❌ Annulé.", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
+
+
+async def conversation_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.clear()
+    if update and update.effective_chat:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⏰ Session expirée (inactivité). On repart du menu principal.",
+            reply_markup=MAIN_KEYBOARD,
+        )
 
 
 # ── Construction du handler ──────────────────────────────────────────────────
@@ -866,8 +891,13 @@ def build_conversation_handler() -> ConversationHandler:
             WAITING_ACCOUNT_NAME:       nav + [MessageHandler(btn_filter, receive_account_name)],
             WAITING_ACCOUNT_BALANCE:    nav + [MessageHandler(btn_filter, receive_account_balance)],
             WAITING_PROJECT_NAME:       nav + [MessageHandler(btn_filter, receive_project_name)],
+            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, conversation_timeout)],
         },
-        fallbacks=[],
+        fallbacks=[
+            CommandHandler("annuler", cancel),
+            CommandHandler("cancel", cancel),
+        ],
+        conversation_timeout=600,
         per_user=True,
         per_chat=True,
     )

@@ -1,3 +1,4 @@
+import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from app.core.config import TELEGRAM_ALLOWED_USER_ID
@@ -31,7 +32,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     try:
-        intent = interpret(text)
+        intent = await asyncio.to_thread(interpret, text)
     except Exception:
         await update.message.reply_text("Je n'ai pas compris.", reply_markup=MAIN_KEYBOARD)
         return

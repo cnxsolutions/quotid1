@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from app.core.database import supabase
 from app.core.accounts import get_accounts
@@ -16,17 +17,9 @@ def _prev_month(year: int, month: int) -> tuple[int, int]:
     return (year, month - 1) if month > 1 else (year - 1, 12)
 
 
-def _fetch_month(year: int, month: int) -> tuple[float, float]:
-    start, end = _month_range(year, month)
-    exp = sum(
-        float(r["amount"])
-        for r in supabase.table("expenses").select("amount").gte("date", start).lt("date", end).execute().data
-    )
-    inc = sum(
-        float(r["amount"])
-        for r in supabase.table("incomes").select("amount").gte("date", start).lt("date", end).execute().data
-    )
-    return inc, exp
+def _sum_amount(table: str, gte: str, lt: str) -> float:
+    rows = supabase.table(table).select("amount").gte("date", gte).lt("date", lt).execute().data
+    return sum(float(r["amount"]) for r in rows)
 
 
 def _week_range(offset: int = 0) -> tuple[str, str]:
@@ -38,17 +31,35 @@ def _week_range(offset: int = 0) -> tuple[str, str]:
 
 def get_monthly_summary(year: int, month: int) -> dict:
     start, end = _month_range(year, month)
+    py, pm = _prev_month(year, month)
+    py_start, py_end = _month_range(py, pm)
+    w0_start, w0_end = _week_range(0)
+    w1_start, w1_end = _week_range(1)
 
-    exp_rows = (
-        supabase.table("expenses").select("amount, category")
-        .gte("date", start).lt("date", end).execute().data
-    )
-    inc_rows = (
-        supabase.table("incomes").select("amount")
-        .gte("date", start).lt("date", end).execute().data
-    )
-    charge_rows = supabase.table("charges").select("name, amount, frequency").execute().data
-    account_rows = get_accounts()
+    # Toutes ces requêtes sont indépendantes : on les lance en parallèle
+    # plutôt qu'en série pour éviter d'empiler les latences réseau.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        f_exp_rows = pool.submit(
+            lambda: supabase.table("expenses").select("amount, category").gte("date", start).lt("date", end).execute().data
+        )
+        f_inc_rows = pool.submit(
+            lambda: supabase.table("incomes").select("amount").gte("date", start).lt("date", end).execute().data
+        )
+        f_charge_rows = pool.submit(lambda: supabase.table("charges").select("name, amount, frequency").execute().data)
+        f_accounts = pool.submit(get_accounts)
+        f_prev_inc = pool.submit(_sum_amount, "incomes", py_start, py_end)
+        f_prev_exp = pool.submit(_sum_amount, "expenses", py_start, py_end)
+        f_week_exp = pool.submit(_sum_amount, "expenses", w0_start, w0_end)
+        f_prev_week_exp = pool.submit(_sum_amount, "expenses", w1_start, w1_end)
+
+        exp_rows = f_exp_rows.result()
+        inc_rows = f_inc_rows.result()
+        charge_rows = f_charge_rows.result()
+        account_rows = f_accounts.result()
+        prev_inc = f_prev_inc.result()
+        prev_exp = f_prev_exp.result()
+        week_exp = f_week_exp.result()
+        prev_week_exp = f_prev_week_exp.result()
 
     total_expenses = sum(float(r["amount"]) for r in exp_rows)
     total_incomes = sum(float(r["amount"]) for r in inc_rows)
@@ -63,9 +74,6 @@ def get_monthly_summary(year: int, month: int) -> dict:
         cat = r["category"] or "Autre"
         by_category[cat] = by_category.get(cat, 0.0) + float(r["amount"])
 
-    # Mois précédent
-    py, pm = _prev_month(year, month)
-    prev_inc, prev_exp = _fetch_month(py, pm)
     prev_cashflow = prev_inc - prev_exp
 
     def _delta(current: float, previous: float) -> str:
@@ -74,19 +82,6 @@ def get_monthly_summary(year: int, month: int) -> dict:
         pct = ((current - previous) / previous) * 100
         arrow = "▲" if pct > 0 else "▼"
         return f" {arrow}{abs(pct):.0f}%"
-
-    # Semaine courante vs semaine précédente
-    w0_start, w0_end = _week_range(0)
-    w1_start, w1_end = _week_range(1)
-
-    week_exp = sum(
-        float(r["amount"])
-        for r in supabase.table("expenses").select("amount").gte("date", w0_start).lt("date", w0_end).execute().data
-    )
-    prev_week_exp = sum(
-        float(r["amount"])
-        for r in supabase.table("expenses").select("amount").gte("date", w1_start).lt("date", w1_end).execute().data
-    )
 
     # Rythme : projection fin de mois
     today = date.today()

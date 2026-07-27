@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone, time
 from zoneinfo import ZoneInfo
@@ -22,7 +23,7 @@ async def _error_handler(update, context) -> None:
 
 
 async def _daily_task_report(context) -> None:
-    tasks = get_pending_tasks()
+    tasks = await asyncio.to_thread(get_pending_tasks)
     if not tasks:
         return
     msg = _format_tasks_report(tasks, "☀️ BONJOUR — TES TÂCHES")
@@ -30,7 +31,7 @@ async def _daily_task_report(context) -> None:
 
 
 async def _remind_due_tomorrow(context) -> None:
-    tasks = get_tasks_due_tomorrow()
+    tasks = await asyncio.to_thread(get_tasks_due_tomorrow)
     if not tasks:
         return
     msg = "⏰ ÉCHÉANCE DEMAIN\n\n"
@@ -39,7 +40,7 @@ async def _remind_due_tomorrow(context) -> None:
 
 
 async def _remind_due_in_3_days(context) -> None:
-    tasks = get_tasks_due_in_days(3)
+    tasks = await asyncio.to_thread(get_tasks_due_in_days, 3)
     if not tasks:
         return
     msg = "📅 ÉCHÉANCE DANS 3 JOURS\n\n"
@@ -48,7 +49,7 @@ async def _remind_due_in_3_days(context) -> None:
 
 
 async def _daily_hadith(context) -> None:
-    h = get_random_hadith()
+    h = await asyncio.to_thread(get_random_hadith)
     if not h:
         return
     msg = format_hadith(h)
@@ -57,7 +58,7 @@ async def _daily_hadith(context) -> None:
 
 async def _weekly_ai_report(context) -> None:
     try:
-        report = generate_weekly_report()
+        report = await asyncio.to_thread(generate_weekly_report)
         msg = f"📊 RAPPORT HEBDOMADAIRE\n\n{report}"
         await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
