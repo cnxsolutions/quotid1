@@ -52,21 +52,16 @@ def get_random_hadith() -> dict | None:
 
 
 def format_hadith(h: dict) -> str:
-    lines = [
-        "╔══════════════════════════════╗",
-        "║   🕌 HADITH DU JOUR          ║",
-        "╠══════════════════════════════╣",
-        "",
-    ]
+    import html
+    lines = ["<b>🕌 Hadith du jour</b>", ""]
     if h["arabic"]:
-        lines.append(h["arabic"])
+        lines.append(f"<blockquote>{html.escape(h['arabic'], quote=False)}</blockquote>")
         lines.append("")
     if h["english"]:
-        lines.append(h["english"])
+        lines.append(f"<blockquote>{html.escape(h['english'], quote=False)}</blockquote>")
         lines.append("")
-    lines.append(f"── {h['book']} n°{h['number']}")
+    source = f"— {html.escape(h['book'], quote=False)} n°{html.escape(str(h['number']), quote=False)}"
     if h["chapter"]:
-        lines.append(f"   {h['chapter']}")
-    lines.append("")
-    lines.append("╚══════════════════════════════╝")
+        source += f" · {html.escape(h['chapter'], quote=False)}"
+    lines.append(source)
     return "\n".join(lines)
