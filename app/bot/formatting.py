@@ -61,10 +61,10 @@ def accounts_block(accounts: list) -> str:
 def charges_block(charges: list) -> str:
     if not charges:
         return "Aucune charge."
-    name_w = min(max((len(c["name"]) for c in charges), default=5), 16)
+    name_w = min(max((len(c["name"]) for c in charges), default=5), 20)
     lines = []
     for c in charges:
-        label = esc(c["name"])[:name_w].ljust(name_w)
+        label = truncate(esc(c["name"]), name_w).ljust(name_w)
         lines.append(f"{label} {money(c['amount']):>13} / {c['frequency']}")
     return pre(lines)
 
@@ -123,24 +123,28 @@ def task_urgency_badge(due_date: str | None) -> str:
     from datetime import date as _date
     delta = (_date.fromisoformat(due_date) - _date.today()).days
     if delta < 0:
-        return "🔥"
-    if delta == 0:
         return "🔴"
+    if delta == 0:
+        return "🟠"
     if delta == 1:
         return "🟡"
     if delta <= 3:
-        return "🟠"
+        return "🟢"
     return "⚪"
+
+
+def truncate(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 1].rstrip() + "…"
 
 
 def projects_block(projects: list) -> str:
     if not projects:
         return "Aucun projet."
     ordered = sorted(projects, key=lambda p: p["total"], reverse=True)
-    name_w = min(max((len(p["name"]) for p in ordered), default=5), 16)
+    name_w = min(max((len(p["name"]) for p in ordered), default=5), 20)
     lines = []
     for p in ordered:
-        label = esc(p["name"])[:name_w].ljust(name_w)
+        label = truncate(esc(p["name"]), name_w).ljust(name_w)
         n = p["count"]
         lines.append(f"{label} {money(p['total']):>13}  {n} revenu{'s' if n != 1 else ''}")
     if len(ordered) > 1:
