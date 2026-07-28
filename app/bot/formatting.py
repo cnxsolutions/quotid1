@@ -34,6 +34,10 @@ def hr(width: int) -> str:
     return "─" * width
 
 
+def truncate(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: width - 1].rstrip() + "…"
+
+
 def category_bars(by_category: dict, width: int = 10) -> str:
     if not by_category:
         return ""
@@ -48,7 +52,7 @@ def category_bars(by_category: dict, width: int = 10) -> str:
 
 def accounts_block(accounts: list) -> str:
     if not accounts:
-        return "Aucun compte."
+        return pre(["Aucun compte."])
     name_w = max((len(a["name"]) for a in accounts), default=5)
     lines = [f"{esc(a['name']):<{name_w}} {money(a['balance']):>13}" for a in accounts]
     if len(accounts) > 1:
@@ -60,7 +64,7 @@ def accounts_block(accounts: list) -> str:
 
 def charges_block(charges: list) -> str:
     if not charges:
-        return "Aucune charge."
+        return pre(["Aucune charge."])
     name_w = min(max((len(c["name"]) for c in charges), default=5), 20)
     lines = []
     for c in charges:
@@ -79,7 +83,7 @@ def movement_confirmation(
     d: Date | None = None,
 ) -> str:
     label = "Dépense" if kind == "expense" else "Revenu"
-    parts = [f"<b>{money(amount)}</b>"]
+    parts = [money(amount)]
     if description:
         parts.append(esc(description))
     if category:
@@ -90,14 +94,14 @@ def movement_confirmation(
         parts.append(esc(project))
     if d:
         parts.append(d.strftime("%d/%m/%Y"))
-    return f"✅ {label} · " + " · ".join(parts)
+    return pre([f"✅ {label} · " + " · ".join(parts)])
 
 
 def confirmation(label: str, name: str, extra: list[str] | None = None) -> str:
-    msg = f"✅ {label} · <b>{esc(name)}</b>"
+    line = f"✅ {label} · {esc(name)}"
     if extra:
-        msg += " · " + " · ".join(extra)
-    return msg
+        line += " · " + " · ".join(extra)
+    return pre([line])
 
 
 def task_confirmation(description: str, project: str | None = None, due_date: Date | None = None) -> str:
@@ -108,13 +112,13 @@ def task_confirmation(description: str, project: str | None = None, due_date: Da
 
 
 def step_prompt(question: str, recap: list[str] | None = None) -> str:
-    if recap:
-        return " · ".join(recap) + "\n" + f"<b>{question}</b>"
-    return f"<b>{question}</b>"
+    lines = list(recap) if recap else []
+    lines.append(question)
+    return pre(lines)
 
 
 def error(text: str) -> str:
-    return f"❌ {text}"
+    return pre([f"❌ {text}"])
 
 
 def task_urgency_badge(due_date: str | None) -> str:
@@ -133,13 +137,9 @@ def task_urgency_badge(due_date: str | None) -> str:
     return "⚪"
 
 
-def truncate(text: str, width: int) -> str:
-    return text if len(text) <= width else text[: width - 1].rstrip() + "…"
-
-
 def projects_block(projects: list) -> str:
     if not projects:
-        return "Aucun projet."
+        return pre(["Aucun projet."])
     ordered = sorted(projects, key=lambda p: p["total"], reverse=True)
     name_w = min(max((len(p["name"]) for p in ordered), default=5), 20)
     lines = []
@@ -156,7 +156,7 @@ def projects_block(projects: list) -> str:
 
 def history_block(rows: list, empty_text: str) -> str:
     if not rows:
-        return empty_text
+        return pre([empty_text])
     lines = [
         f"{(r.get('date') or '—'):<10} {money(float(r['amount'])):>12}  {esc(r.get('category') or 'Sans catégorie')}"
         for r in rows

@@ -3,10 +3,10 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from app.core.config import TELEGRAM_ALLOWED_USER_ID
 from app.bot.conversation import (
-    MAIN_KEYBOARD, MAIN_MENU_TEXT, BTN_FINANCE, BTN_TASKS, BTN_GESTION, BTN_SUMMARY, BTN_HISTORY,
+    MAIN_KEYBOARD, BTN_FINANCE, BTN_TASKS, BTN_GESTION, BTN_SUMMARY, BTN_HISTORY,
     _format_tasks_report,
 )
-from app.bot.formatting import esc, accounts_block, movement_confirmation, task_confirmation
+from app.bot.formatting import esc, pre, accounts_block, movement_confirmation, task_confirmation
 from app.core.expenses import insert_expense
 from app.core.incomes import insert_income
 from app.core.tasks import insert_task, get_pending_tasks, mark_done
@@ -20,10 +20,7 @@ _NAVIGATION_BUTTONS = {BTN_FINANCE, BTN_TASKS, BTN_GESTION, BTN_SUMMARY, BTN_HIS
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != TELEGRAM_ALLOWED_USER_ID:
         return
-    await update.message.reply_text(
-        f"{MAIN_MENU_TEXT}\nBot opérationnel ✓",
-        reply_markup=MAIN_KEYBOARD,
-    )
+    await update.message.reply_text(pre(["🏠 Menu", "Bot opérationnel ✓"]), reply_markup=MAIN_KEYBOARD)
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -38,7 +35,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         intent = await asyncio.to_thread(interpret, text)
     except Exception:
-        await update.message.reply_text("Je n'ai pas compris.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(pre(["Je n'ai pas compris."]), reply_markup=MAIN_KEYBOARD)
         return
 
     kind = intent.get("type")
@@ -51,7 +48,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         result = insert_expense(amount, description, category, account_name)
         msg = movement_confirmation("expense", amount, description=description, category=category, account=account_name)
         if result is False:
-            msg += f"\n⚠️ Compte « {esc(account_name)} » introuvable."
+            msg += "\n" + pre([f"⚠️ Compte « {esc(account_name)} » introuvable."])
         await update.message.reply_text(msg, reply_markup=MAIN_KEYBOARD)
 
     elif kind == "income":
@@ -63,7 +60,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         result = insert_income(amount, description, category, account_name, None, project_name)
         msg = movement_confirmation("income", amount, description=description, category=category, account=account_name, project=project_name)
         if result is False:
-            msg += f"\n⚠️ Compte « {esc(account_name)} » introuvable."
+            msg += "\n" + pre([f"⚠️ Compte « {esc(account_name)} » introuvable."])
         await update.message.reply_text(msg, reply_markup=MAIN_KEYBOARD)
 
     elif kind == "task":
@@ -74,20 +71,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif kind == "tasks_list":
         tasks = get_pending_tasks()
         if not tasks:
-            await update.message.reply_text("<b>✨ Aucune tâche en cours.</b>", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(pre(["✨ Aucune tâche en cours !"]), reply_markup=MAIN_KEYBOARD)
         else:
             await update.message.reply_text(_format_tasks_report(tasks, "📋 Mes tâches"), reply_markup=MAIN_KEYBOARD)
 
     elif kind == "task_done":
         task_id = int(intent["id"])
         if mark_done(task_id):
-            await update.message.reply_text(f"<b>✅ Tâche {task_id} terminée.</b>", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(pre([f"✅ Tâche {task_id} terminée."]), reply_markup=MAIN_KEYBOARD)
         else:
-            await update.message.reply_text(f"<b>❌ Tâche {task_id} introuvable.</b>", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(pre([f"❌ Tâche {task_id} introuvable."]), reply_markup=MAIN_KEYBOARD)
 
     elif kind == "cash":
         accounts = get_accounts()
         await update.message.reply_text("<b>💳 Soldes</b>\n\n" + accounts_block(accounts), reply_markup=MAIN_KEYBOARD)
 
     else:
-        await update.message.reply_text("Je n'ai pas compris.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(pre(["Je n'ai pas compris."]), reply_markup=MAIN_KEYBOARD)
