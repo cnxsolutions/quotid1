@@ -72,7 +72,9 @@ DÉPENSES 30 DERNIERS JOURS :
                     "Tu es un conseiller financier personnel concis et direct. "
                     "Analyse les données et produis un rapport hebdomadaire en français. "
                     "Identifie les tendances, les points d'attention, et donne 2-3 recommandations concrètes. "
-                    "Format : courts paragraphes, direct, pas de listes à rallonge."
+                    "Format : courts paragraphes, direct, pas de listes à rallonge. "
+                    "Mets en **gras** (avec des doubles astérisques) les chiffres clés et les recommandations "
+                    "pour qu'ils ressortent visuellement. N'utilise aucun autre markdown (pas de titres #, pas de listes à puces)."
                 ),
             },
             {

@@ -1,4 +1,4 @@
-import html
+import asyncio
 import logging
 from datetime import datetime, timezone, time
 from zoneinfo import ZoneInfo
@@ -8,6 +8,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, Defaults, MessageHa
 from app.core.config import TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_ID
 from app.bot.handlers import start, message_handler
 from app.bot.conversation import build_conversation_handler, _format_tasks, _format_tasks_report
+from app.bot.formatting import markdown_bold_to_html
 from app.core.tasks import get_pending_tasks, get_tasks_due_tomorrow, get_tasks_due_in_days
 from app.core.weekly_report import generate_weekly_report
 from app.core.hadith import get_random_hadith, format_hadith
@@ -24,7 +25,7 @@ async def _error_handler(update, context) -> None:
 
 
 async def _daily_task_report(context) -> None:
-    tasks = get_pending_tasks()
+    tasks = await asyncio.to_thread(get_pending_tasks)
     if not tasks:
         return
     msg = _format_tasks_report(tasks, "☀️ Bonjour — tes tâches")
@@ -32,7 +33,7 @@ async def _daily_task_report(context) -> None:
 
 
 async def _remind_due_tomorrow(context) -> None:
-    tasks = get_tasks_due_tomorrow()
+    tasks = await asyncio.to_thread(get_tasks_due_tomorrow)
     if not tasks:
         return
     msg = "<b>⏰ Échéance demain</b>\n\n" + _format_tasks(tasks)
@@ -40,7 +41,7 @@ async def _remind_due_tomorrow(context) -> None:
 
 
 async def _remind_due_in_3_days(context) -> None:
-    tasks = get_tasks_due_in_days(3)
+    tasks = await asyncio.to_thread(get_tasks_due_in_days, 3)
     if not tasks:
         return
     msg = "<b>📅 Échéance dans 3 jours</b>\n\n" + _format_tasks(tasks)
@@ -48,7 +49,7 @@ async def _remind_due_in_3_days(context) -> None:
 
 
 async def _daily_hadith(context) -> None:
-    h = get_random_hadith()
+    h = await asyncio.to_thread(get_random_hadith)
     if not h:
         return
     msg = format_hadith(h)
@@ -57,8 +58,8 @@ async def _daily_hadith(context) -> None:
 
 async def _weekly_ai_report(context) -> None:
     try:
-        report = generate_weekly_report()
-        msg = "<b>📊 Rapport hebdomadaire</b>\n\n" + html.escape(report, quote=False)
+        report = await asyncio.to_thread(generate_weekly_report)
+        msg = "<b>📊 Rapport hebdomadaire</b>\n\n" + markdown_bold_to_html(report)
         await context.bot.send_message(chat_id=TELEGRAM_ALLOWED_USER_ID, text=msg)
     except Exception as e:
         logging.error("Erreur rapport hebdomadaire : %s", e)
@@ -71,11 +72,13 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(build_conversation_handler())
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    app.job_queue.run_daily(_daily_hadith, time=time(4, 30, tzinfo=PARIS))
-    app.job_queue.run_daily(_daily_task_report, time=time(5, 0, tzinfo=PARIS))
-    app.job_queue.run_daily(_remind_due_tomorrow, time=time(20, 0, tzinfo=PARIS))
-    app.job_queue.run_daily(_remind_due_in_3_days, time=time(20, 0, tzinfo=PARIS))
-    app.job_queue.run_daily(_weekly_ai_report, time=time(8, 0, tzinfo=PARIS), days=(0,))
+
+    # Jobs uniques pour éviter les doublons
+    app.job_queue.run_daily(_daily_hadith, time=time(4, 30, tzinfo=PARIS), name="daily_hadith")
+    app.job_queue.run_daily(_daily_task_report, time=time(5, 0, tzinfo=PARIS), name="daily_tasks")
+    app.job_queue.run_daily(_remind_due_tomorrow, time=time(20, 0, tzinfo=PARIS), name="remind_tomorrow")
+    app.job_queue.run_daily(_remind_due_in_3_days, time=time(20, 0, tzinfo=PARIS), name="remind_3days")
+    app.job_queue.run_daily(_weekly_ai_report, time=time(8, 0, tzinfo=PARIS), days=(0,), name="weekly_report")
     app.run_polling()
 
 

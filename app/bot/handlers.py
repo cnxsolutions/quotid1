@@ -1,13 +1,20 @@
+import asyncio
 from telegram import Update
 from telegram.ext import ContextTypes
 from app.core.config import TELEGRAM_ALLOWED_USER_ID
-from app.bot.conversation import MAIN_KEYBOARD, MAIN_MENU_TEXT, _format_tasks_report
+from app.bot.conversation import (
+    MAIN_KEYBOARD, MAIN_MENU_TEXT, BTN_FINANCE, BTN_TASKS, BTN_GESTION, BTN_SUMMARY, BTN_HISTORY,
+    _format_tasks_report,
+)
 from app.bot.formatting import esc, accounts_block, movement_confirmation, task_confirmation
 from app.core.expenses import insert_expense
 from app.core.incomes import insert_income
 from app.core.tasks import insert_task, get_pending_tasks, mark_done
 from app.core.accounts import get_accounts
 from app.core.interpreter import interpret
+
+
+_NAVIGATION_BUTTONS = {BTN_FINANCE, BTN_TASKS, BTN_GESTION, BTN_SUMMARY, BTN_HISTORY}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -25,8 +32,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     text = update.message.text.strip()
 
+    if text in _NAVIGATION_BUTTONS:
+        return
+
     try:
-        intent = interpret(text)
+        intent = await asyncio.to_thread(interpret, text)
     except Exception:
         await update.message.reply_text("Je n'ai pas compris.", reply_markup=MAIN_KEYBOARD)
         return
@@ -64,16 +74,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif kind == "tasks_list":
         tasks = get_pending_tasks()
         if not tasks:
-            await update.message.reply_text("✨ Aucune tâche en cours.", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text("<b>✨ Aucune tâche en cours.</b>", reply_markup=MAIN_KEYBOARD)
         else:
             await update.message.reply_text(_format_tasks_report(tasks, "📋 Mes tâches"), reply_markup=MAIN_KEYBOARD)
 
     elif kind == "task_done":
         task_id = int(intent["id"])
         if mark_done(task_id):
-            await update.message.reply_text(f"✅ Tâche {task_id} terminée.", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(f"<b>✅ Tâche {task_id} terminée.</b>", reply_markup=MAIN_KEYBOARD)
         else:
-            await update.message.reply_text(f"❌ Tâche {task_id} introuvable.", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(f"<b>❌ Tâche {task_id} introuvable.</b>", reply_markup=MAIN_KEYBOARD)
 
     elif kind == "cash":
         accounts = get_accounts()

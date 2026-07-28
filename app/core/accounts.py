@@ -2,21 +2,13 @@ from app.core.database import supabase
 
 
 def get_accounts() -> list:
-    rows = supabase.table("accounts").select("id, name, initial_balance").order("name").execute().data
+    rows = supabase.table("accounts").select("id, name, initial_balance, balance").order("name").execute().data
     result = []
     for a in rows:
-        inc = sum(
-            float(r["amount"])
-            for r in supabase.table("incomes").select("amount").eq("account_id", a["id"]).execute().data
-        )
-        exp = sum(
-            float(r["amount"])
-            for r in supabase.table("expenses").select("amount").eq("account_id", a["id"]).execute().data
-        )
         result.append({
             "id": a["id"],
             "name": a["name"],
-            "balance": float(a["initial_balance"]) + inc - exp,
+            "balance": float(a.get("balance") or a["initial_balance"]),
         })
     return result
 
@@ -32,4 +24,12 @@ def get_default_account() -> str | None:
 
 
 def insert_account(name: str, balance: float = 0.0) -> None:
-    supabase.table("accounts").insert({"name": name, "initial_balance": balance}).execute()
+    supabase.table("accounts").insert({"name": name, "initial_balance": balance, "balance": balance}).execute()
+
+
+def update_account_balance(account_id: int, delta: float) -> None:
+    """Met à jour le solde d'un compte (positif = revenu, négatif = dépense)."""
+    result = supabase.table("accounts").select("balance").eq("id", account_id).execute()
+    if result.data:
+        new_balance = float(result.data[0]["balance"] or 0) + delta
+        supabase.table("accounts").update({"balance": new_balance}).eq("id", account_id).execute()

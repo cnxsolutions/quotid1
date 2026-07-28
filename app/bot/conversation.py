@@ -1,6 +1,8 @@
-from datetime import date as Date
+import asyncio
+import re
+from datetime import date as Date, timedelta
 from telegram import ReplyKeyboardMarkup, Update
-from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
+from telegram.ext import CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 from app.core.config import TELEGRAM_ALLOWED_USER_ID
 from app.core.expenses import insert_expense, get_recent_expenses
 from app.core.incomes import insert_income, get_recent_incomes
@@ -9,10 +11,11 @@ from app.core.accounts import get_accounts, get_default_account, insert_account
 from app.core.utils import CATEGORIES, parse_date
 from app.core.reporting import get_monthly_summary
 from app.core.charges import insert_charge, get_charges
-from app.core.projects import insert_project, get_projects, get_project_summary
+from app.core.projects import insert_project, get_projects, get_projects_with_summary
 from app.bot.formatting import (
-    esc, money, bar, pre, hr, category_bars, accounts_block, charges_block,
-    movement_confirmation, task_confirmation,
+    esc, money, bar, pre, hr, category_bars, accounts_block, charges_block, projects_block,
+    history_block, movement_confirmation, task_confirmation, confirmation, step_prompt, error,
+    task_urgency_badge,
 )
 
 # ── Boutons ──────────────────────────────────────────────────────────────────
@@ -26,6 +29,7 @@ BTN_EXPENSE = "💸 Dépense"
 BTN_INCOME = "💵 Revenu"
 BTN_CASH = "💳 Soldes"
 BTN_CHARGES = "📦 Charges fixes"
+BTN_HISTORY = "🕘 Historique"
 
 BTN_NEW_TASK = "➕ Nouvelle tâche"
 BTN_TODAY = "📋 Mes tâches"
@@ -40,10 +44,10 @@ BTN_ACCOUNTS_BALANCE = "📊 Soldes"
 BTN_NEW_PROJECT = "➕ Nouveau projet"
 BTN_PROJECTS_LIST = "📋 Liste"
 
-BTN_SKIP = "Passer"
+BTN_SKIP = "⏭ Passer"
 BTN_BACK = "⬅️ Retour"
-BTN_TODAY_DATE = "Aujourd'hui"
-BTN_YESTERDAY = "Hier"
+BTN_TODAY_DATE = "📆 Aujourd'hui"
+BTN_YESTERDAY = "⏪ Hier"
 BTN_CUSTOM_DATE = "📅 Saisir date"
 
 MAIN_MENU_TEXT = "<b>🏠 Menu</b>"
@@ -96,6 +100,7 @@ FINANCE_KEYBOARD = ReplyKeyboardMarkup(
     [
         [BTN_EXPENSE, BTN_INCOME],
         [BTN_CASH, BTN_CHARGES],
+        [BTN_HISTORY],
         [BTN_BACK],
     ],
     resize_keyboard=True,
@@ -135,10 +140,13 @@ PROJECTS_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+BTN_FREQ_MONTHLY = "🔁 Mensuel"
+BTN_FREQ_ANNUAL = "🗓 Annuel"
 FREQ_KEYBOARD = ReplyKeyboardMarkup(
-    [["Mensuel", "Annuel"]],
+    [[BTN_FREQ_MONTHLY, BTN_FREQ_ANNUAL]],
     resize_keyboard=True,
 )
+FREQ_MAP = {BTN_FREQ_MONTHLY: "Mensuel", BTN_FREQ_ANNUAL: "Annuel"}
 
 DATE_KEYBOARD = ReplyKeyboardMarkup(
     [[BTN_TODAY_DATE, BTN_YESTERDAY], [BTN_CUSTOM_DATE, BTN_SKIP]],
@@ -162,14 +170,14 @@ def _project_keyboard() -> ReplyKeyboardMarkup:
 def _account_keyboard() -> ReplyKeyboardMarkup:
     accounts = get_accounts()
     rows = [[a["name"]] for a in accounts]
-    default = get_default_account()
-    label = f"Passer (→ {default})" if default else "Passer"
+    default = accounts[0]["name"] if accounts else None
+    label = f"{BTN_SKIP} (→ {default})" if default else BTN_SKIP
     rows.append([label])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
 def _resolve_account(raw: str) -> str | None:
-    if raw.startswith("Passer"):
+    if raw.startswith(BTN_SKIP):
         return get_default_account()
     return raw.lower()
 
@@ -182,27 +190,56 @@ def _category_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 
+def _expense_recap(context) -> list[str]:
+    recap = [f"💸 <b>{money(context.user_data['expense_amount'])}</b>"]
+    category = context.user_data.get("expense_category")
+    if category:
+        recap.append(f"🏷 {esc(category)}")
+    account = context.user_data.get("expense_account")
+    if account:
+        recap.append(f"🏦 {esc(account)}")
+    return recap
+
+
+def _income_recap(context) -> list[str]:
+    recap = [f"💵 <b>{money(context.user_data['income_amount'])}</b>"]
+    category = context.user_data.get("income_category")
+    if category:
+        recap.append(f"🏷 {esc(category)}")
+    account = context.user_data.get("income_account")
+    if account:
+        recap.append(f"🏦 {esc(account)}")
+    project = context.user_data.get("income_project")
+    if project:
+        recap.append(f"🗂 {esc(project)}")
+    return recap
+
+
+def _task_recap(context) -> list[str]:
+    recap = [f"📝 <b>{esc(context.user_data['task_desc'])}</b>"]
+    project = context.user_data.get("task_project")
+    if project:
+        recap.append(f"🗂 {esc(project)}")
+    return recap
+
+
+def _charge_recap(context) -> list[str]:
+    recap = [f"📦 <b>{esc(context.user_data['charge_name'])}</b>"]
+    amount = context.user_data.get("charge_amount")
+    if amount is not None:
+        recap.append(f"🧾 {money(amount)}")
+    freq = context.user_data.get("charge_freq")
+    if freq:
+        recap.append(f"🔁 {freq}")
+    return recap
+
+
 def _format_tasks(tasks: list) -> str:
     from datetime import date as _date
     today = _date.today()
     lines = []
     for t in tasks:
-        if t.get("due_date"):
-            due = _date.fromisoformat(t["due_date"])
-            delta = (due - today).days
-            if delta < 0:
-                badge = "🔥"
-            elif delta == 0:
-                badge = "🔴"
-            elif delta == 1:
-                badge = "🟡"
-            elif delta <= 3:
-                badge = "🟠"
-            else:
-                badge = "⚪"
-        else:
-            badge = "⚪"
-
+        badge = task_urgency_badge(t.get("due_date"))
         line = f"{badge} <b>{t['id']}.</b> {esc(t['description'])}"
         if t.get("project_name"):
             line += f" · {esc(t['project_name'])}"
@@ -248,6 +285,16 @@ def _format_charges_display() -> str:
     ]))
     lines.append("💡 Quand débitée, enregistre-la en dépense (catégorie « Charges »).")
     return "\n".join(lines)
+
+
+def _format_finance_history(n: int = 5) -> str:
+    expenses = get_recent_expenses(n)
+    incomes = get_recent_incomes(n)
+    return "\n\n".join([
+        "<b>🕘 Historique</b>",
+        "<b>Revenus récents</b>\n" + history_block(incomes, "Aucun revenu récent."),
+        "<b>Dépenses récentes</b>\n" + history_block(expenses, "Aucune dépense récente."),
+    ])
 
 
 _MONTH_NAMES_FR = [
@@ -327,11 +374,11 @@ async def receive_finance_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     raw = update.message.text.strip()
 
     if raw == BTN_EXPENSE:
-        await update.message.reply_text("Montant de la dépense ?", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("💸 <b>Montant de la dépense ?</b>", reply_markup=MAIN_KEYBOARD)
         return WAITING_EXPENSE_AMOUNT
 
     if raw == BTN_INCOME:
-        await update.message.reply_text("Montant du revenu ?", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("💵 <b>Montant du revenu ?</b>", reply_markup=MAIN_KEYBOARD)
         return WAITING_INCOME_AMOUNT
 
     if raw == BTN_CASH:
@@ -341,6 +388,10 @@ async def receive_finance_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if raw == BTN_CHARGES:
         await update.message.reply_text(_format_charges_display(), reply_markup=FINANCE_KEYBOARD)
+        return WAITING_FINANCE_MENU
+
+    if raw == BTN_HISTORY:
+        await update.message.reply_text(_format_finance_history(), reply_markup=FINANCE_KEYBOARD)
         return WAITING_FINANCE_MENU
 
     if raw == BTN_BACK:
@@ -364,13 +415,13 @@ async def receive_tasks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     raw = update.message.text.strip()
 
     if raw == BTN_NEW_TASK:
-        await update.message.reply_text("Description de la tâche ?", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📝 <b>Description de la tâche ?</b>", reply_markup=MAIN_KEYBOARD)
         return WAITING_TASK
 
     if raw == BTN_TODAY:
         tasks = get_pending_tasks()
         if not tasks:
-            await update.message.reply_text("✨ Aucune tâche en cours !", reply_markup=TASKS_KEYBOARD)
+            await update.message.reply_text("<b>✨ Aucune tâche en cours !</b>", reply_markup=TASKS_KEYBOARD)
         else:
             await update.message.reply_text(_format_tasks_report(tasks, "📋 Mes tâches"), reply_markup=TASKS_KEYBOARD)
         return WAITING_TASKS_MENU
@@ -378,11 +429,14 @@ async def receive_tasks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if raw == BTN_TASK_DONE:
         tasks = get_pending_tasks()
         if not tasks:
-            await update.message.reply_text("✨ Aucune tâche en cours !", reply_markup=TASKS_KEYBOARD)
+            await update.message.reply_text("<b>✨ Aucune tâche en cours !</b>", reply_markup=TASKS_KEYBOARD)
             return WAITING_TASKS_MENU
-        rows = [[f"{t['id']}. {t['description']}"] for t in tasks]
+        rows = [
+            [f"{task_urgency_badge(t.get('due_date'))} {t['id']}. {t['description'][:30]}{'…' if len(t['description']) > 30 else ''}"]
+            for t in tasks
+        ]
         rows.append([BTN_BACK])
-        await update.message.reply_text("Quelle tâche terminer ?", reply_markup=ReplyKeyboardMarkup(rows, resize_keyboard=True))
+        await update.message.reply_text("<b>☑️ Quelle tâche terminer ?</b>", reply_markup=ReplyKeyboardMarkup(rows, resize_keyboard=True))
         return WAITING_DONE_SELECT
 
     if raw == BTN_BACK:
@@ -414,7 +468,7 @@ async def receive_gestion_menu(update: Update, context: ContextTypes.DEFAULT_TYP
         return WAITING_PROJECTS_MENU
 
     if raw == BTN_NEW_CHARGE:
-        await update.message.reply_text("Nom de la charge ?", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📦 <b>Nom de la charge ?</b>", reply_markup=MAIN_KEYBOARD)
         return WAITING_CHARGE_NAME
 
     if raw == BTN_BACK:
@@ -432,7 +486,7 @@ async def btn_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
     from datetime import date as _date
     today = _date.today()
-    s = get_monthly_summary(today.year, today.month)
+    s = await asyncio.to_thread(get_monthly_summary, today.year, today.month)
     lines = _build_summary_lines(s, today.month, today.year)
     await update.message.reply_text("\n".join(lines), reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
@@ -445,33 +499,40 @@ async def receive_expense_amount(update: Update, context: ContextTypes.DEFAULT_T
     try:
         amount = float(text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("❌ Montant invalide. Réessaie.")
+        await update.message.reply_text(error("Montant invalide. Réessaie (ex : 45 ou 12,50)."))
         return WAITING_EXPENSE_AMOUNT
     if amount <= 0:
-        await update.message.reply_text("❌ Le montant doit être positif.")
+        await update.message.reply_text(error("Le montant doit être positif."))
         return WAITING_EXPENSE_AMOUNT
     context.user_data["expense_amount"] = amount
-    await update.message.reply_text("Catégorie ?", reply_markup=_category_keyboard())
+    await update.message.reply_text(step_prompt("🏷 Catégorie ?", _expense_recap(context)), reply_markup=_category_keyboard())
     return WAITING_EXPENSE_CATEGORY
 
 
 async def receive_expense_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.message.text.strip()
     context.user_data["expense_category"] = None if raw == BTN_SKIP else raw
-    await update.message.reply_text("Compte ?", reply_markup=_account_keyboard())
+    await update.message.reply_text(step_prompt("🏦 Compte ?", _expense_recap(context)), reply_markup=_account_keyboard())
     return WAITING_EXPENSE_ACCOUNT
 
 
 async def receive_expense_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["expense_account"] = _resolve_account(update.message.text.strip())
-    await update.message.reply_text("Date ?", reply_markup=DATE_KEYBOARD)
+    await update.message.reply_text(step_prompt("📅 Date ?", _expense_recap(context)), reply_markup=DATE_KEYBOARD)
     return WAITING_EXPENSE_DATE
 
 
 async def receive_expense_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.message.text.strip()
+    if raw == BTN_TODAY_DATE:
+        return await _finalize_expense(update, context, Date.today())
+    if raw == BTN_YESTERDAY:
+        return await _finalize_expense(update, context, Date.today() - timedelta(days=1))
     if raw == BTN_CUSTOM_DATE:
-        await update.message.reply_text("Saisis la date (ex : 02/06/2026 ou 02/06)", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(
+            step_prompt("Saisis la date (ex : 02/06/2026 ou 02/06)", _expense_recap(context)),
+            reply_markup=MAIN_KEYBOARD,
+        )
         return WAITING_EXPENSE_DATE_INPUT
     if raw == BTN_SKIP:
         return await _finalize_expense(update, context, None)
@@ -482,7 +543,7 @@ async def receive_expense_date(update: Update, context: ContextTypes.DEFAULT_TYP
 async def receive_expense_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     d = parse_date(update.message.text.strip())
     if d is None:
-        await update.message.reply_text("❌ Format invalide. Essaie : 02/06/2026 ou 02/06")
+        await update.message.reply_text(error("Format de date invalide. Essaie : 02/06/2026 ou 02/06."))
         return WAITING_EXPENSE_DATE_INPUT
     return await _finalize_expense(update, context, d)
 
@@ -504,40 +565,47 @@ async def receive_income_amount(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         amount = float(text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("❌ Montant invalide. Réessaie.")
+        await update.message.reply_text(error("Montant invalide. Réessaie (ex : 45 ou 12,50)."))
         return WAITING_INCOME_AMOUNT
     if amount <= 0:
-        await update.message.reply_text("❌ Le montant doit être positif.")
+        await update.message.reply_text(error("Le montant doit être positif."))
         return WAITING_INCOME_AMOUNT
     context.user_data["income_amount"] = amount
-    await update.message.reply_text("Catégorie ?", reply_markup=_category_keyboard())
+    await update.message.reply_text(step_prompt("🏷 Catégorie ?", _income_recap(context)), reply_markup=_category_keyboard())
     return WAITING_INCOME_CATEGORY
 
 
 async def receive_income_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.message.text.strip()
     context.user_data["income_category"] = None if raw == BTN_SKIP else raw
-    await update.message.reply_text("Compte ?", reply_markup=_account_keyboard())
+    await update.message.reply_text(step_prompt("🏦 Compte ?", _income_recap(context)), reply_markup=_account_keyboard())
     return WAITING_INCOME_ACCOUNT
 
 
 async def receive_income_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["income_account"] = _resolve_account(update.message.text.strip())
-    await update.message.reply_text("Projet ? (optionnel)", reply_markup=_project_keyboard())
+    await update.message.reply_text(step_prompt("🗂 Projet ? (optionnel)", _income_recap(context)), reply_markup=_project_keyboard())
     return WAITING_INCOME_PROJECT
 
 
 async def receive_income_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.message.text.strip()
     context.user_data["income_project"] = None if raw == BTN_SKIP else raw
-    await update.message.reply_text("Date ?", reply_markup=DATE_KEYBOARD)
+    await update.message.reply_text(step_prompt("📅 Date ?", _income_recap(context)), reply_markup=DATE_KEYBOARD)
     return WAITING_INCOME_DATE
 
 
 async def receive_income_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.message.text.strip()
+    if raw == BTN_TODAY_DATE:
+        return await _finalize_income(update, context, Date.today())
+    if raw == BTN_YESTERDAY:
+        return await _finalize_income(update, context, Date.today() - timedelta(days=1))
     if raw == BTN_CUSTOM_DATE:
-        await update.message.reply_text("Saisis la date (ex : 02/06/2026 ou 02/06)", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(
+            step_prompt("Saisis la date (ex : 02/06/2026 ou 02/06)", _income_recap(context)),
+            reply_markup=MAIN_KEYBOARD,
+        )
         return WAITING_INCOME_DATE_INPUT
     if raw == BTN_SKIP:
         return await _finalize_income(update, context, None)
@@ -548,7 +616,7 @@ async def receive_income_date(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def receive_income_date_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     d = parse_date(update.message.text.strip())
     if d is None:
-        await update.message.reply_text("❌ Format invalide. Essaie : 02/06/2026 ou 02/06")
+        await update.message.reply_text(error("Format de date invalide. Essaie : 02/06/2026 ou 02/06."))
         return WAITING_INCOME_DATE_INPUT
     return await _finalize_income(update, context, d)
 
@@ -571,15 +639,15 @@ async def receive_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
     if raw == BTN_BACK:
         await update.message.reply_text(MAIN_MENU_TEXT, reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
-    try:
-        task_id = int(raw.split(".")[0])
-    except (ValueError, IndexError):
-        await update.message.reply_text("❌ Sélection invalide.")
+    m = re.match(r"^\D*(\d+)\.", raw)
+    if not m:
+        await update.message.reply_text(error("Sélection invalide."))
         return WAITING_DONE_SELECT
+    task_id = int(m.group(1))
     if mark_done(task_id):
-        await update.message.reply_text("✅ Tâche terminée.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("<b>✅ Tâche terminée.</b>", reply_markup=MAIN_KEYBOARD)
     else:
-        await update.message.reply_text("❌ Tâche introuvable ou déjà terminée.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("<b>❌ Tâche introuvable ou déjà terminée.</b>", reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 
@@ -587,21 +655,28 @@ async def receive_done_select(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def receive_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["task_desc"] = update.message.text.strip()
-    await update.message.reply_text("Projet ? (optionnel)", reply_markup=_project_keyboard())
+    await update.message.reply_text(step_prompt("🗂 Projet ? (optionnel)", _task_recap(context)), reply_markup=_project_keyboard())
     return WAITING_TASK_PROJECT
 
 
 async def receive_task_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.message.text.strip()
     context.user_data["task_project"] = None if raw == BTN_SKIP else raw
-    await update.message.reply_text("Date d'échéance ?", reply_markup=DATE_KEYBOARD)
+    await update.message.reply_text(step_prompt("⏰ Échéance ? (optionnel)", _task_recap(context)), reply_markup=DATE_KEYBOARD)
     return WAITING_TASK_DUE
 
 
 async def receive_task_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     raw = update.message.text.strip()
+    if raw == BTN_TODAY_DATE:
+        return await _finalize_task(update, context, Date.today())
+    if raw == BTN_YESTERDAY:
+        return await _finalize_task(update, context, Date.today() - timedelta(days=1))
     if raw == BTN_CUSTOM_DATE:
-        await update.message.reply_text("Saisis la date (ex : 02/06/2026 ou 02/06)", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(
+            step_prompt("Saisis la date (ex : 02/06/2026 ou 02/06)", _task_recap(context)),
+            reply_markup=MAIN_KEYBOARD,
+        )
         return WAITING_TASK_DUE_INPUT
     if raw == BTN_SKIP:
         return await _finalize_task(update, context, None)
@@ -612,7 +687,7 @@ async def receive_task_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def receive_task_due_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     d = parse_date(update.message.text.strip())
     if d is None:
-        await update.message.reply_text("❌ Format invalide. Essaie : 02/06/2026 ou 02/06")
+        await update.message.reply_text(error("Format de date invalide. Essaie : 02/06/2026 ou 02/06."))
         return WAITING_TASK_DUE_INPUT
     return await _finalize_task(update, context, d)
 
@@ -636,7 +711,7 @@ async def receive_charge_name(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(MAIN_MENU_TEXT, reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
     context.user_data["charge_name"] = raw
-    await update.message.reply_text("Montant ?", reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(step_prompt("🧾 Montant ?", _charge_recap(context)), reply_markup=MAIN_KEYBOARD)
     return WAITING_CHARGE_AMOUNT
 
 
@@ -645,23 +720,24 @@ async def receive_charge_amount(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         amount = float(text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("❌ Montant invalide.")
+        await update.message.reply_text(error("Montant invalide."))
         return WAITING_CHARGE_AMOUNT
     if amount <= 0:
-        await update.message.reply_text("❌ Le montant doit être positif.")
+        await update.message.reply_text(error("Le montant doit être positif."))
         return WAITING_CHARGE_AMOUNT
     context.user_data["charge_amount"] = amount
-    await update.message.reply_text("Fréquence ?", reply_markup=FREQ_KEYBOARD)
+    await update.message.reply_text(step_prompt("🔁 Fréquence ?", _charge_recap(context)), reply_markup=FREQ_KEYBOARD)
     return WAITING_CHARGE_FREQ
 
 
 async def receive_charge_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    freq = update.message.text.strip()
-    if freq not in ("Mensuel", "Annuel"):
-        await update.message.reply_text("Choisis Mensuel ou Annuel.", reply_markup=FREQ_KEYBOARD)
+    raw = update.message.text.strip()
+    freq = FREQ_MAP.get(raw)
+    if freq is None:
+        await update.message.reply_text(error("Choisis Mensuel ou Annuel."), reply_markup=FREQ_KEYBOARD)
         return WAITING_CHARGE_FREQ
     context.user_data["charge_freq"] = freq
-    await update.message.reply_text("Compte ?", reply_markup=_account_keyboard())
+    await update.message.reply_text(step_prompt("🏦 Compte ? (optionnel)", _charge_recap(context)), reply_markup=_account_keyboard())
     return WAITING_CHARGE_ACCOUNT
 
 
@@ -671,10 +747,10 @@ async def receive_charge_account(update: Update, context: ContextTypes.DEFAULT_T
     amount = context.user_data.pop("charge_amount")
     freq = context.user_data.pop("charge_freq")
     insert_charge(name, amount, freq, account_name)
-    msg = f"✅ Charge ajoutée · <b>{esc(name)}</b> — {money(amount)} / {freq}"
+    extra = [f"{money(amount)} / {freq}"]
     if account_name:
-        msg += f" · {esc(account_name)}"
-    await update.message.reply_text(msg, reply_markup=MAIN_KEYBOARD)
+        extra.append(esc(account_name))
+    await update.message.reply_text(confirmation("Charge ajoutée", name, extra), reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 
@@ -684,7 +760,7 @@ async def receive_accounts_menu(update: Update, context: ContextTypes.DEFAULT_TY
     raw = update.message.text.strip()
 
     if raw == BTN_NEW_ACCOUNT:
-        await update.message.reply_text("Nom du compte ?", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("🏦 <b>Nom du compte ?</b>", reply_markup=MAIN_KEYBOARD)
         return WAITING_ACCOUNT_NAME
 
     if raw == BTN_ACCOUNTS_BALANCE:
@@ -706,7 +782,10 @@ async def receive_account_name(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(MAIN_MENU_TEXT, reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
     context.user_data["account_name"] = raw
-    await update.message.reply_text("Solde initial (0 si vide) ?", reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(
+        step_prompt("💰 Solde initial ? (0 si vide)", [f"🏦 <b>{esc(raw)}</b>"]),
+        reply_markup=MAIN_KEYBOARD,
+    )
     return WAITING_ACCOUNT_BALANCE
 
 
@@ -715,11 +794,11 @@ async def receive_account_balance(update: Update, context: ContextTypes.DEFAULT_
     try:
         balance = float(text.replace(",", ".")) if text else 0.0
     except ValueError:
-        await update.message.reply_text("❌ Montant invalide (ou tape 0).")
+        await update.message.reply_text(error("Montant invalide (ou tape 0)."))
         return WAITING_ACCOUNT_BALANCE
     name = context.user_data.pop("account_name")
     insert_account(name, balance)
-    await update.message.reply_text(f"✅ Compte créé · <b>{esc(name)}</b> — {money(balance)}", reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(confirmation("Compte créé", name, [money(balance)]), reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
 
@@ -729,19 +808,12 @@ async def receive_projects_menu(update: Update, context: ContextTypes.DEFAULT_TY
     raw = update.message.text.strip()
 
     if raw == BTN_NEW_PROJECT:
-        await update.message.reply_text("Nom du projet ?", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("🗂 <b>Nom du projet ?</b>", reply_markup=MAIN_KEYBOARD)
         return WAITING_PROJECT_NAME
 
     if raw == BTN_PROJECTS_LIST:
-        projects = get_projects()
-        if not projects:
-            await update.message.reply_text("<b>🗂 Projets</b>\n\nAucun projet.", reply_markup=GESTION_KEYBOARD)
-        else:
-            lines = []
-            for p in projects:
-                s = get_project_summary(p["name"])
-                lines.append(f"• <b>{esc(p['name'])}</b> — {money(s['total'])} ({s['count']} revenus)")
-            await update.message.reply_text("<b>🗂 Projets</b>\n\n" + "\n".join(lines), reply_markup=GESTION_KEYBOARD)
+        summaries = await asyncio.to_thread(get_projects_with_summary)
+        await update.message.reply_text("<b>🗂 Projets</b>\n\n" + projects_block(summaries), reply_markup=GESTION_KEYBOARD)
         return WAITING_GESTION_MENU
 
     if raw == BTN_BACK:
@@ -758,14 +830,31 @@ async def receive_project_name(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(MAIN_MENU_TEXT, reply_markup=MAIN_KEYBOARD)
         return ConversationHandler.END
     insert_project(raw.upper())
-    await update.message.reply_text(f"✅ Projet créé · <b>{esc(raw.upper())}</b>", reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(confirmation("Projet créé", raw.upper()), reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
+
+
+# ── Annulation / expiration ──────────────────────────────────────────────────
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    await update.message.reply_text("<b>❌ Annulé.</b>", reply_markup=MAIN_KEYBOARD)
+    return ConversationHandler.END
+
+
+async def conversation_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.clear()
+    if update and update.effective_chat:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⏰ <b>Session expirée</b> (inactivité). On repart du menu principal.",
+            reply_markup=MAIN_KEYBOARD,
+        )
 
 
 # ── Construction du handler ──────────────────────────────────────────────────
 
 def build_conversation_handler() -> ConversationHandler:
-    import re
     btn_filter = filters.TEXT & ~filters.COMMAND
     nav = [
         MessageHandler(filters.Regex(f"^{re.escape(BTN_FINANCE)}$"), btn_finance),
@@ -804,8 +893,13 @@ def build_conversation_handler() -> ConversationHandler:
             WAITING_ACCOUNT_NAME:       nav + [MessageHandler(btn_filter, receive_account_name)],
             WAITING_ACCOUNT_BALANCE:    nav + [MessageHandler(btn_filter, receive_account_balance)],
             WAITING_PROJECT_NAME:       nav + [MessageHandler(btn_filter, receive_project_name)],
+            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, conversation_timeout)],
         },
-        fallbacks=[],
+        fallbacks=[
+            CommandHandler("annuler", cancel),
+            CommandHandler("cancel", cancel),
+        ],
+        conversation_timeout=600,
         per_user=True,
         per_chat=True,
     )

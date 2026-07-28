@@ -15,10 +15,23 @@ def get_projects() -> list:
     return result.data
 
 
-def get_project_summary(name: str) -> dict:
-    project_id = get_project_id(name)
-    if project_id is None:
-        return {"name": name, "total": 0.0, "count": 0}
-    result = supabase.table("incomes").select("amount").eq("project_id", project_id).execute()
-    total = sum(float(r["amount"]) for r in result.data)
-    return {"name": name, "total": total, "count": len(result.data)}
+def get_projects_with_summary() -> list:
+    """Liste des projets avec total/nombre de revenus, en 2 requêtes au lieu de 2N+1."""
+    projects = get_projects()
+    if not projects:
+        return []
+    ids = [p["id"] for p in projects]
+    incomes = supabase.table("incomes").select("project_id, amount").in_("project_id", ids).execute().data
+    totals: dict[int, dict] = {}
+    for r in incomes:
+        agg = totals.setdefault(r["project_id"], {"total": 0.0, "count": 0})
+        agg["total"] += float(r["amount"])
+        agg["count"] += 1
+    return [
+        {
+            "name": p["name"],
+            "total": totals.get(p["id"], {}).get("total", 0.0),
+            "count": totals.get(p["id"], {}).get("count", 0),
+        }
+        for p in projects
+    ]
