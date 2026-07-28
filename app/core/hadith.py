@@ -1,6 +1,11 @@
+import html
 import random
 import httpx
 from app.core.config import HADITH_API_KEY
+
+
+def esc(value) -> str:
+    return html.escape(str(value), quote=False) if value is not None else ""
 
 BOOKS = [
     "sahih-bukhari",
@@ -52,17 +57,15 @@ def get_random_hadith() -> dict | None:
 
 
 def format_hadith(h: dict) -> str:
-    lines = [
-        "🌙 HADITH DU JOUR",
-        "",
-    ]
+    lines = ["<b>🕌 Hadith du jour</b>", ""]
     if h["arabic"]:
-        lines.append(f"« {h['arabic']} »")
+        lines.append(f"<blockquote>{esc(h['arabic'])}</blockquote>")
         lines.append("")
     if h["english"]:
-        lines.append(h["english"])
+        lines.append(f"<blockquote>{esc(h['english'])}</blockquote>")
         lines.append("")
-    lines.append(f"Source : {h['book']} n°{h['number']}")
+    source = f"— {esc(h['book'])} n°{esc(h['number'])}"
     if h["chapter"]:
-        lines.append(f"Chapitre : {h['chapter']}")
+        source += f" · {esc(h['chapter'])}"
+    lines.append(source)
     return "\n".join(lines)
