@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 .venv/
+
+# Clés SSH du serveur : jamais dans Git
+/.keys/
+*.key
+*.pem
